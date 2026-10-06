@@ -23,6 +23,9 @@ $graceMs      = __GRACE__
 
 # Filled in from the running app before it is stopped; preferred for the relaunch.
 $script:resolvedAppExe = ''
+# Ports the app's Host was serving on; the next Host cannot bind them until they are
+# really released, and binding too early kills the whole startup.
+$script:appPorts = @()
 
 function Write-Log([string] $message) {
   $line = '{0} {1}' -f (Get-Date).ToString('yyyy-MM-ddTHH:mm:ss'), $message
@@ -35,6 +38,81 @@ function Write-Log([string] $message) {
 
 function Get-AppProcesses {
   @(Get-Process -Name $appName -ErrorAction SilentlyContinue)
+}
+
+# Which TCP ports a set of processes is listening on.
+function Get-AppListenPorts([object[]] $processes) {
+  $ids = @($processes | ForEach-Object { $_.Id })
+  if ($ids.Count -eq 0) { return @() }
+  $ports = @()
+  try {
+    $ports = @(Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue |
+      Where-Object { $ids -contains $_.OwningProcess } |
+      Select-Object -ExpandProperty LocalPort -Unique)
+  } catch { }
+  if ($ports.Count -eq 0) {
+    # `netstat -ano` fallback for hosts without the NetTCPIP module.
+    try {
+      foreach ($line in @(netstat -ano | Select-String 'LISTENING')) {
+        $parts = @(($line.Line -split '\s+') | Where-Object { $_ -ne '' })
+        if ($parts.Count -ge 5 -and $ids -contains [int]$parts[4]) {
+          $ports += [int](($parts[1] -split ':')[-1])
+        }
+      }
+    } catch { }
+  }
+  return @($ports | Sort-Object -Unique)
+}
+
+# Which process (if any) currently listens on a port; 0 means free.
+function Get-PortOwner([int] $port) {
+  try {
+    $connection = Get-NetTCPConnection -State Listen -LocalPort $port -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($null -ne $connection) { return [int]$connection.OwningProcess }
+  } catch { }
+  try {
+    foreach ($line in @(netstat -ano | Select-String (':' + $port + '\s'))) {
+      $parts = @(($line.Line -split '\s+') | Where-Object { $_ -ne '' })
+      if ($parts.Count -ge 5 -and $parts[3] -eq 'LISTENING') { return [int]$parts[4] }
+    }
+  } catch { }
+  return 0
+}
+
+# Wait until nothing listens on these ports any more.
+function Wait-PortFree([int[]] $ports, [int] $timeoutSeconds) {
+  if (@($ports).Count -eq 0) { return $true }
+  $deadline = (Get-Date).AddSeconds($timeoutSeconds)
+  while ((Get-Date) -lt $deadline) {
+    $busy = @($ports | Where-Object { (Get-PortOwner $_) -ne 0 })
+    if ($busy.Count -eq 0) { return $true }
+    Start-Sleep -Milliseconds 500
+  }
+  return $false
+}
+
+function Format-PortOwners([int[]] $ports) {
+  $parts = @()
+  foreach ($port in @($ports)) {
+    $owner = Get-PortOwner $port
+    if ($owner -ne 0) {
+      $name = try { (Get-Process -Id $owner -ErrorAction Stop).ProcessName } catch { 'unknown' }
+      $parts += ('{0}<-{1}({2})' -f $port, $name, $owner)
+    }
+  }
+  if ($parts.Count -eq 0) { return 'none' }
+  return ($parts -join ', ')
+}
+
+# A relaunch only counts as successful when the app shows a window AND its Host is
+# serving again; a window alone can be the "unavailable" dialog.
+function Test-AppHealthy([int[]] $ports) {
+  $window = Get-AppProcesses | Where-Object { $_.MainWindowHandle -ne 0 } | Select-Object -First 1
+  if ($null -eq $window) { return $null }
+  if (@($ports).Count -gt 0) {
+    if (@($ports | Where-Object { (Get-PortOwner $_) -ne 0 }).Count -eq 0) { return $null }
+  }
+  return $window
 }
 
 function Stop-App {
@@ -50,6 +128,8 @@ function Stop-App {
     $script:resolvedAppExe = $captured
     Write-Log "app executable: $captured"
   }
+  $script:appPorts = Get-AppListenPorts $processes
+  if ($script:appPorts.Count -gt 0) { Write-Log ('app is serving on port(s): ' + ($script:appPorts -join ', ')) }
   Write-Log ('stopping {0} app process(es)' -f $processes.Count)
   $processes | Stop-Process -Force -ErrorAction SilentlyContinue
   for ($i = 0; $i -lt 40; $i++) {
@@ -58,6 +138,26 @@ function Stop-App {
   }
   $left = (Get-AppProcesses).Count
   if ($left -gt 0) { Write-Log ('warning: {0} app process(es) still running' -f $left) }
+  # A new Host that cannot bind the port the old one served dies during startup with
+  # "listen ... 127.0.0.1:<port>" and the app shows its "unavailable" dialog, so wait
+  # for the socket to be released instead of just waiting for the processes.
+  if (-not (Wait-PortFree $script:appPorts 30)) {
+    Write-Log ('warning: port(s) still held after 30s: ' + (Format-PortOwners $script:appPorts))
+    foreach ($port in @($script:appPorts)) {
+      $owner = Get-PortOwner $port
+      if ($owner -ne 0) {
+        # Usually a half-dead Host that outlived the window; clearing it is what makes
+        # the relaunch possible at all.
+        try {
+          Stop-Process -Id $owner -Force -ErrorAction Stop
+          Write-Log ("cleared the process holding port $port (pid $owner)")
+        } catch {
+          Write-Log ("could not clear the process holding port $port (pid $owner): " + $_.Exception.Message)
+        }
+      }
+    }
+    [void](Wait-PortFree $script:appPorts 10)
+  }
   # Electron releases its single-instance lock as it exits; starting the next
   # instance too early makes it hand over to the dying one and exit silently.
   Start-Sleep -Seconds 2
@@ -81,18 +181,6 @@ function Merge-Patch([string] $target) {
   $addition = "`r`n# Added by dsh-profile-bridge when the Desktop app took over this profile.`r`n- id: ui-chat`r`n  name: `"@deepseek-ai/dsh-client-ui-chat`"`r`n  config:`r`n    transcriptView: standard`r`n    performanceUsage: detailed`r`n- id: ui-settings`r`n  name: `"@deepseek-ai/dsh-client-ui-settings`"`r`n  config:`r`n    enabled: true`r`n- id: ui-settings-account`r`n  name: `"@deepseek-ai/dsh-client-ui-settings-account`"`r`n  config:`r`n    version: 1`r`n    step: done`r`n    usage: detailed`r`n    developerTools: true`r`n    purpose: null`r`n    process: standard`r`n    completion: api-key`r`n"
   [IO.File]::AppendAllText($patch, $addition, (New-Object Text.UTF8Encoding($false)))
   Write-Log "merged desktop UI settings into $patch"
-}
-
-# Wait for the relaunched app to own a real window (a process without one is not a
-# visible app to the user).
-function Wait-AppWindow([int] $timeoutSeconds) {
-  $deadline = (Get-Date).AddSeconds($timeoutSeconds)
-  while ((Get-Date) -lt $deadline) {
-    $candidate = Get-AppProcesses | Where-Object { $_.MainWindowHandle -ne 0 } | Select-Object -First 1
-    if ($null -ne $candidate) { return $candidate }
-    Start-Sleep -Milliseconds 500
-  }
-  return $null
 }
 
 # Bring that window to the foreground so the switch visibly ends with the app back
@@ -135,18 +223,48 @@ function Relaunch-App {
   }
   if ($cleared.Count -gt 0) { Write-Log ('cleared for the relaunch: ' + ($cleared -join ', ')) }
   for ($attempt = 1; $attempt -le 3; $attempt++) {
+    [void](Wait-PortFree $script:appPorts 20)
     Start-Process -FilePath $exe -UseNewEnvironment | Out-Null
     Write-Log ('relaunch attempt {0}: started {1}' -f $attempt, $exe)
-    $window = Wait-AppWindow 20
+    $window = $null
+    $deadline = (Get-Date).AddSeconds(25)
+    while ((Get-Date) -lt $deadline) {
+      $window = Test-AppHealthy $script:appPorts
+      if ($null -ne $window) { break }
+      Start-Sleep -Milliseconds 500
+    }
     if ($null -ne $window) {
-      Write-Log ('app window is up (pid {0})' -f $window.Id)
+      Write-Log ('app is up and serving (pid {0})' -f $window.Id)
       Bring-AppToFront $window
       return
     }
-    Write-Log 'no app window appeared; retrying'
+    # A failed attempt usually means the app came up broken (typically its
+    # "unavailable" dialog because a port was still taken). Clear it before the next
+    # try, otherwise every attempt collides with the previous one.
+    Write-Log ('attempt {0} did not come up healthy; clearing it before the next try' -f $attempt)
+    Stop-App
     Start-Sleep -Seconds 2
   }
   Write-Log 'the app did not come back on its own; please start it manually'
+}
+
+# Self-test hook: with PROFILE_BRIDGE_SELFTEST=1 the script exercises its own port
+# helpers against a listener it owns and exits. A regression here then fails the test
+# suite instead of appearing later as an app that cannot bind its port.
+if ($env:PROFILE_BRIDGE_SELFTEST -eq '1') {
+  $listener = New-Object Net.Sockets.TcpListener([Net.IPAddress]::Loopback, 0)
+  $listener.Start()
+  $probePort = ([Net.IPEndPoint]$listener.LocalEndpoint).Port
+  $busyWhileListening = -not (Wait-PortFree @($probePort) 2)
+  $listener.Stop()
+  $freeAfterStop = Wait-PortFree @($probePort) 10
+  $healthyWithoutWindow = $null -eq (Test-AppHealthy @($probePort))
+  if ($busyWhileListening -and $freeAfterStop -and $healthyWithoutWindow) {
+    Write-Log 'selftest ok: port wait and health check behave'
+    exit 0
+  }
+  Write-Log ('selftest FAILED busy={0} free={1} noWindow={2}' -f $busyWhileListening, $freeAfterStop, $healthyWithoutWindow)
+  exit 1
 }
 
 # The Harness Host runs with the profile directory as its working directory, so a

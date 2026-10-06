@@ -178,6 +178,27 @@ Harness 的宿主进程是**以 Node 模式运行的 Electron**（`ELECTRON_RUN_
 
 修复（v0.1.4）：重启应用前先清掉 `ELECTRON_RUN_AS_NODE`、`ELECTRON_NO_ATTACH_CONSOLE`、`ELECTRON_FORCE_IS_PACKAGED`、`NODE_OPTIONS`、`DSH_DESKTOP_NODE_EXECUTABLE`，再用 **`Start-Process -UseNewEnvironment`**（全新环境，等价于从开始菜单打开）启动；macOS/Linux 脚本同样 `unset` 这些变量。
 
+**7. "切换后应用起不来：The application could not start or stopped unexpectedly"**
+
+崩溃日志里是决定性的一行：
+
+```
+webserver (required)
+  Error: listen UNKNOWN: unknown error 127.0.0.1:19387
+```
+
+**上一个宿主的端口还没释放**，新宿主绑定失败 → 启动审计判定必需插件未激活 → 应用弹"不可用"对话框。更糟的是重试会撞上自己上一次的崩溃实例，于是连续崩溃。
+
+修复（v0.1.5）：
+
+| 措施 | 说明 |
+|---|---|
+| 记录端口 | 停止应用**前**从它的进程里读出正在监听的端口（`Get-NetTCPConnection`，无此模块时退回 `netstat -ano`），不硬编码端口号 |
+| 等端口释放 | 杀掉进程后轮询到端口真正空闲（最长 30 秒）；若仍被占用，日志写明占用者并清掉那个残留进程 |
+| 健康检查 | 重启成功的判定 = **窗口存在 且 Host 正在该端口服务**（只看窗口会把"不可用"对话框误判为成功） |
+| 失败先清场 | 某次尝试没起来就先杀掉那个（半死的）实例，再重试，最多 3 次 |
+| 脚本自测 | `PROFILE_BRIDGE_SELFTEST=1` 让生成的脚本对自己的端口工具做一次真实验证（自检套件会跑它） |
+
 ## 手动回滚（不依赖本插件）
 
 ```powershell
@@ -260,9 +281,29 @@ The switch must happen while the app is closed (it holds its own profile directo
 - **The helper must not inherit the profile directory as its working directory.** The Desktop app starts its Host with `cwd` set to the profile directory, and a process whose working directory *is* a directory blocks renaming it — the helper would lock its own target and fail with "still locked" even after the app is gone. The launcher sets `cwd` to the plugin state directory, `run.cmd` starts with `cd /d "%~dp0"`, and the script leaves for `$env:TEMP`; the regression test runs the real wrapper from inside the profile directory.
 - **Relaunch robustness:** Electron's single-instance lock can still be held while the old instance exits, so the helper waits for it, remembers the executable path taken from the running app, retries the launch up to three times while waiting for a real window, and brings that window to the front.
 - **A relaunch needs a clean environment.** The Host runs the Electron binary in Node mode (`ELECTRON_RUN_AS_NODE=1`), and a helper that inherits that variable starts a window-less Node process instead of the app: the process appears, quits, and the app never comes back — while starting it by hand from Explorer works. The helper clears those variables and starts the app with `Start-Process -UseNewEnvironment`.
+- **The app port must be free before the next Host starts.** The Host binds a local port (19387 here); a Host that cannot bind it dies during the startup audit and the app shows "The application could not start or stopped unexpectedly". The helper reads the ports from the running app before stopping it, waits for them to be released, clears a leftover holder, and only counts a relaunch as successful when the window is up **and** the port is served again.
 
 ## Verify
 
-`node verify/precheck.mjs` builds a throwaway profiles tree and really performs a switch, a re-point and a revert in it (with app stop/relaunch disabled, so nothing of yours is touched).
+**沙盒自检（不碰你的应用）：**
+
+```bash
+node verify/precheck.mjs
+```
+
+它建一棵临时的 profiles 树，在里面真的做一次切换、改指向、还原（禁用"停应用/重启应用"，所以你机器上的东西一点都不会被动），并且会：渲染并**执行**生成的脚本、用真实包装脚本**从一个敌意工作目录**（profile 目录本身）里跑一遍、让生成的脚本跑**它自己的端口自测**（`PROFILE_BRIDGE_SELFTEST=1`）、解析 POSIX 模板的 shell 语法，以及验证宿主 RPC 的三条通道。
+
+**真实端到端（会真的关闭并重启桌面版）：**
+
+```bash
+# 只打印计划，不动应用
+node verify/e2e.mjs unlink
+node verify/e2e.mjs link web
+# 真的执行（应用会关闭、切换、再自动回来）
+node verify/e2e.mjs unlink --yes
+node verify/e2e.mjs link web --yes
+```
+
+走的完全是插件的生产路径（渲染 → 写盘 → 分离式启动），所以它能验证沙盒测不出来的东西：分离启动、工作目录、Node 模式环境变量、端口释放、窗口与 Host 是否真的起来。**唯一带有破坏性的测试**，需要 `--yes` 才执行。
 
 MIT licensed.

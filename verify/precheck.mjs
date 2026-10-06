@@ -142,6 +142,11 @@ assert.ok(windowsRender.wrapper.includes('2>&1'), 'the wrapper must capture Powe
 // window-less Node process and the app never comes back.
 assert.ok(windowsRender.text.includes('ELECTRON_RUN_AS_NODE'), 'the helper must clear the Node-mode environment before relaunching the app')
 assert.ok(windowsRender.text.includes('-UseNewEnvironment'), 'the relaunch must start the app with a fresh environment')
+// A Host that cannot bind the port its predecessor served dies during startup, so the
+// helper waits for the socket and verifies the relaunch actually came up.
+assert.ok(windowsRender.text.includes('Wait-PortFree'), 'the helper must wait for the app port to be released')
+assert.ok(windowsRender.text.includes('Test-AppHealthy'), 'the relaunch must check the window and the port, not just a process')
+assert.ok(windowsRender.text.includes('did not come up healthy; clearing it'), 'a failed attempt must be cleared before the next one')
 assert.equal(renderHelper({
   profilesRoot: profilesDir, liveDir, activeName: 'desktop', targetDir, appExe: '',
   logPath, stateDir, stamp: 'shape', platform: 'linux',
@@ -195,6 +200,19 @@ console.log('launcher shape: ok')
 }
 
 if (process.platform === 'win32') {
+  // The generated script's own self-test: it opens a listener and checks that the port
+  // helpers report it as busy and then free. Without this, "the app could not bind its
+  // port" would only ever show up on a real machine.
+  const selfTest = renderHelper({
+    profilesRoot: profilesDir, liveDir, activeName: 'desktop', targetDir, appExe: '',
+    logPath, stateDir, stamp: 'selftest', skipAppStop: true, noRelaunch: true,
+  })
+  writeHelper(selfTest)
+  execFileSync('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', selfTest.scriptPath],
+    { stdio: 'inherit', env: { ...process.env, PROFILE_BRIDGE_SELFTEST: '1' } })
+  assert.ok(readFileSync(logPath, 'utf8').includes('selftest ok'), 'the generated script must pass its own port self-test')
+  console.log('helper selftest: ok')
+
   // link, launched by the real wrapper from inside the profile directory — the
   // hostile working directory that used to make this fail with "still locked".
   runHelperViaLauncher({ mode: 'link', targetDir, stamp: 'precheck1' }, liveDir)
