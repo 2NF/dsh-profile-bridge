@@ -133,6 +133,19 @@ pnpm now wants to use the store at "...\pnpm\store\v11" ...
 
 它需要访问 Connection 服务自己的 `webServer`，在某些版本上会抛 `cannot get property without inject`。本插件**先尝试官方通道，失败就自动降级**为自建的同协议路由（`/profile-bridge`，仅接受本机 loopback 访问，信封与官方 `client-request` / `server-response` 一致），所以浏览器半边无需改动。
 
+**3. Windows 上不能用 `detached` 直接启动 `powershell.exe`**
+
+实测（Node 24 + Windows）：`spawn('powershell.exe', …, { detached: true, stdio: 'ignore' })` 的进程**会创建但从不执行**（没有日志、没有副作用，看起来像"点了没反应"）；而 `detached` 启动 `cmd.exe` 完全正常，且子进程能在父进程被强杀后继续运行。
+
+所以插件在 Windows 上生成两个文件、用 `cmd.exe` 中转：
+
+| 文件 | 作用 |
+|---|---|
+| `<DSH_HOME>/profile-bridge/switch.ps1` | 真正干活的脚本（**带 UTF-8 BOM**，否则 Windows PowerShell 会把非 ASCII 路径读成乱码） |
+| `<DSH_HOME>/profile-bridge/run.cmd` | 一行包装：`powershell.exe … -File switch.ps1 > last-run.log.out 2>&1`，由插件以 detached 方式启动 |
+
+排错时看两个日志：`last-run.log`（脚本的结构化日志）和 **`last-run.log.out`**（PowerShell 自身的输出——脚本连第一行都没跑到时，原因在这里）。设置页的「上次操作日志」会自动显示有内容的那个。
+
 ## 手动回滚（不依赖本插件）
 
 ```powershell
@@ -211,6 +224,7 @@ The switch must happen while the app is closed (it holds its own profile directo
 - Do not run the Desktop app and `dsh --profile <same profile>` at the same time.
 - macOS/Linux use the symlink path; the same logic, but **not verified on real hardware** yet.
 - The plugin lives in a profile, so install it in both profiles if you want the page after switching.
+- **Windows launch detail (measured):** `spawn('powershell.exe', …, { detached: true })` creates a process that never runs, so the helper is started as a detached `cmd.exe` running `run.cmd`, which invokes PowerShell with its output redirected to `last-run.log.out`. When the panel shows no log, that transcript is where the reason is.
 
 ## Verify
 

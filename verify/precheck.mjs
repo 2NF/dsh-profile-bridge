@@ -93,14 +93,38 @@ const runHelper = (request) => {
     ...request,
   })
   writeHelper(rendered)
-  execFileSync(process.platform === 'win32' ? 'powershell.exe' : '/bin/sh',
-    process.platform === 'win32' ? ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', rendered.path] : [rendered.path],
+  const isWindows = process.platform === 'win32'
+  const script = rendered.scriptPath
+  // Behaviour of the generated script, run directly (the wrapper only adds the
+  // detached launch and the transcript redirect, which is checked below).
+  execFileSync(isWindows ? 'powershell.exe' : '/bin/sh',
+    isWindows ? ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', script] : [script],
     { stdio: 'inherit' })
 }
+
+// Launcher shape: on Windows the plugin must run the helper through a detached
+// `cmd.exe` (a detached powershell.exe never starts here), and the generated
+// script must carry a UTF-8 BOM so Windows PowerShell reads non-ASCII paths.
+const windowsRender = renderHelper({
+  profilesRoot: profilesDir, liveDir, activeName: 'desktop', targetDir, appExe: '',
+  logPath, stateDir, stamp: 'shape', platform: 'win32',
+})
+assert.equal(windowsRender.command, 'cmd.exe', 'the Windows launcher must be cmd.exe')
+assert.ok(windowsRender.wrapperPath?.endsWith('run.cmd'), 'the Windows launcher needs a cmd wrapper')
+assert.ok(windowsRender.wrapper.includes('-File'), 'the wrapper must run the script with -File')
+assert.ok(windowsRender.wrapper.includes('switch.ps1'), 'the wrapper must name the generated script')
+assert.ok(windowsRender.wrapper.includes('2>&1'), 'the wrapper must capture PowerShell startup errors')
+assert.equal(renderHelper({
+  profilesRoot: profilesDir, liveDir, activeName: 'desktop', targetDir, appExe: '',
+  logPath, stateDir, stamp: 'shape', platform: 'linux',
+}).command, '/bin/sh', 'POSIX keeps the /bin/sh launcher')
+console.log('launcher shape: ok')
 
 if (process.platform === 'win32') {
   // link
   runHelper({ mode: 'link', targetDir, stamp: 'precheck1' })
+  const written = readFileSync(join(stateDir, 'switch.ps1'))
+  assert.deepEqual([...written.subarray(0, 3)], [0xef, 0xbb, 0xbf], 'the Windows script must start with a UTF-8 BOM')
   assert.equal(lstatSync(liveDir).isSymbolicLink(), true, 'the app profile must become a link')
   assert.equal(readLinkTarget(liveDir), resolve(targetDir), 'the link must point at the chosen profile')
   assert.ok(existsSync(join(profilesDir, 'desktop.fresh-precheck1')), 'the previous directory must be kept as a backup')

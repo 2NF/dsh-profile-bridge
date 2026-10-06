@@ -237,7 +237,13 @@ window.__ModuleLoader__.load({
 
         h('details', null,
           h('summary', { style: { cursor: 'pointer', opacity: 0.8 } }, t('log')),
-          h('pre', { style: styles.pre }, status?.logTail && status.logTail !== '' ? status.logTail : t('logEmpty')),
+          // The structured log is empty when the helper never reached its first
+          // line (for example a PowerShell startup failure); the launcher
+          // transcript is where that shows up.
+          h('pre', { style: styles.pre },
+            status?.logTail?.trim()
+              ? status.logTail
+              : status?.transcriptTail?.trim() ? status.transcriptTail : t('logEmpty')),
         ),
 
         h('details', null,
