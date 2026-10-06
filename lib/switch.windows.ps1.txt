@@ -145,15 +145,19 @@ function Stop-App {
     Write-Log ('warning: port(s) still held after 30s: ' + (Format-PortOwners $script:appPorts))
     foreach ($port in @($script:appPorts)) {
       $owner = Get-PortOwner $port
-      if ($owner -ne 0) {
-        # Usually a half-dead Host that outlived the window; clearing it is what makes
-        # the relaunch possible at all.
-        try {
-          Stop-Process -Id $owner -Force -ErrorAction Stop
-          Write-Log ("cleared the process holding port $port (pid $owner)")
-        } catch {
-          Write-Log ("could not clear the process holding port $port (pid $owner): " + $_.Exception.Message)
-        }
+      if ($owner -eq 0) { continue }
+      # Only ever clear a leftover of this app: a program that merely happens to hold
+      # the port is not ours to kill.
+      $ownerName = try { (Get-Process -Id $owner -ErrorAction Stop).ProcessName } catch { '' }
+      if ($ownerName -ne $appName) {
+        Write-Log ("port $port is held by $ownerName (pid $owner), which is not the app; leaving it alone")
+        continue
+      }
+      try {
+        Stop-Process -Id $owner -Force -ErrorAction Stop
+        Write-Log ("cleared the leftover app process holding port $port (pid $owner)")
+      } catch {
+        Write-Log ("could not clear the process holding port $port (pid $owner): " + $_.Exception.Message)
       }
     }
     [void](Wait-PortFree $script:appPorts 10)

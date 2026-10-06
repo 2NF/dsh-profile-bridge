@@ -147,6 +147,7 @@ assert.ok(windowsRender.text.includes('-UseNewEnvironment'), 'the relaunch must 
 assert.ok(windowsRender.text.includes('Wait-PortFree'), 'the helper must wait for the app port to be released')
 assert.ok(windowsRender.text.includes('Test-AppHealthy'), 'the relaunch must check the window and the port, not just a process')
 assert.ok(windowsRender.text.includes('did not come up healthy; clearing it'), 'a failed attempt must be cleared before the next one')
+assert.ok(windowsRender.text.includes('which is not the app; leaving it alone'), 'the helper must never kill a process that merely holds a port')
 assert.equal(renderHelper({
   profilesRoot: profilesDir, liveDir, activeName: 'desktop', targetDir, appExe: '',
   logPath, stateDir, stamp: 'shape', platform: 'linux',
