@@ -1,12 +1,15 @@
 # dsh-profile-bridge
 
+> **一句话：让 DeepSeek Harness 桌面版用上你"已经装好插件的 profile"—— 点一下切换，随时一键还原。**
+> **In one line: make the DeepSeek Harness Desktop app use the profile that already has your plugins — one click to switch, one click to revert.**
+
 [English](#english) | 中文
 
-让 **DeepSeek Harness 桌面版**直接使用你**已经装好插件的 profile**，而不是它自带的那个空 profile。一个设置页、一次点击，随时可还原。
+**桌面版看不到你在别的 profile 里装的那些插件？**这个插件一个设置页、一次点击就解决，而且旧目录会自动备份、随时还原。
 
 ```
-切换前：桌面版 → profiles/desktop（空）        ✗ 看不到你的插件
-切换后：桌面版 → profiles/desktop → profiles/web ✓ 你装的插件全在
+切换前：桌面版 → profiles/desktop（空）          ✗ 看不到你的插件
+切换后：桌面版 → profiles/desktop → profiles/web ✓ 你装的插件全都在
 ```
 
 ## 它解决什么问题
