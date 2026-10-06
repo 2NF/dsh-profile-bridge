@@ -91,6 +91,11 @@ relaunch_app() {
     log 'no app executable known; please start the app manually'
     return 0
   fi
+  # The Harness Host runs as the Electron binary in Node mode (ELECTRON_RUN_AS_NODE=1)
+  # and this helper inherited that environment; starting the app with it set launches a
+  # window-less Node process instead of the app. Drop the Node-mode overrides first
+  # (`open -a` is unaffected either way, a bare binary is not).
+  unset ELECTRON_RUN_AS_NODE ELECTRON_NO_ATTACH_CONSOLE NODE_OPTIONS DSH_DESKTOP_NODE_EXECUTABLE 2>/dev/null || true
   attempt=1
   while [ "$attempt" -le 3 ]; do
     case "$APPEXE" in

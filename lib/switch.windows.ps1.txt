@@ -122,8 +122,20 @@ function Relaunch-App {
     Write-Log 'no app executable known; please start the app manually'
     return
   }
+  # The Harness Host runs as the Electron binary in Node mode
+  # (ELECTRON_RUN_AS_NODE=1) and this helper inherited that environment. Starting
+  # the app with those variables still set launches a window-less Node process
+  # instead of the app - the classic "it never came back" symptom. Drop them first.
+  $cleared = @()
+  foreach ($name in @('ELECTRON_RUN_AS_NODE', 'ELECTRON_NO_ATTACH_CONSOLE', 'ELECTRON_FORCE_IS_PACKAGED', 'NODE_OPTIONS', 'DSH_DESKTOP_NODE_EXECUTABLE')) {
+    if (Test-Path -LiteralPath ('Env:' + $name)) {
+      Remove-Item -LiteralPath ('Env:' + $name) -ErrorAction SilentlyContinue
+      $cleared += $name
+    }
+  }
+  if ($cleared.Count -gt 0) { Write-Log ('cleared for the relaunch: ' + ($cleared -join ', ')) }
   for ($attempt = 1; $attempt -le 3; $attempt++) {
-    Start-Process -FilePath $exe | Out-Null
+    Start-Process -FilePath $exe -UseNewEnvironment | Out-Null
     Write-Log ('relaunch attempt {0}: started {1}' -f $attempt, $exe)
     $window = Wait-AppWindow 20
     if ($null -ne $window) {

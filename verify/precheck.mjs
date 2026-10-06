@@ -137,6 +137,11 @@ assert.ok(windowsRender.wrapperPath?.endsWith('run.cmd'), 'the Windows launcher 
 assert.ok(windowsRender.wrapper.includes('-File'), 'the wrapper must run the script with -File')
 assert.ok(windowsRender.wrapper.includes('switch.ps1'), 'the wrapper must name the generated script')
 assert.ok(windowsRender.wrapper.includes('2>&1'), 'the wrapper must capture PowerShell startup errors')
+// The Host runs the Electron binary in Node mode, so a relaunch must not inherit that
+// environment: with ELECTRON_RUN_AS_NODE set, starting the app executable produces a
+// window-less Node process and the app never comes back.
+assert.ok(windowsRender.text.includes('ELECTRON_RUN_AS_NODE'), 'the helper must clear the Node-mode environment before relaunching the app')
+assert.ok(windowsRender.text.includes('-UseNewEnvironment'), 'the relaunch must start the app with a fresh environment')
 assert.equal(renderHelper({
   profilesRoot: profilesDir, liveDir, activeName: 'desktop', targetDir, appExe: '',
   logPath, stateDir, stamp: 'shape', platform: 'linux',

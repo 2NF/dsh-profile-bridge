@@ -172,6 +172,12 @@ helper 本来就会重启应用，但 **Electron 的单实例锁**在退出瞬�
 | 带到前台 | 窗口出现后用 `ShowWindow` + `SetForegroundWindow` 把它**提到最前** |
 | 明确失败 | 三次都没起来就写"请手动启动应用"，不静默失败 |
 
+**6. "什么都对了，就是应用不会自动回来"** ← 真正的元凶
+
+Harness 的宿主进程是**以 Node 模式运行的 Electron**（`ELECTRON_RUN_AS_NODE=1` —— 这正是它让 Electron 当 Node 跑的方式），helper 继承了这个环境变量。于是 helper 再启动 `DeepSeek Harness.exe` 时，Electron **又变成无窗口的 Node 进程**：进程确实起来了、几秒后自己退出，界面永远不出现。而你手动双击图标时资源管理器给的是干净环境，所以一切正常 —— 现象看起来就像"只有插件不会重开"。
+
+修复（v0.1.4）：重启应用前先清掉 `ELECTRON_RUN_AS_NODE`、`ELECTRON_NO_ATTACH_CONSOLE`、`ELECTRON_FORCE_IS_PACKAGED`、`NODE_OPTIONS`、`DSH_DESKTOP_NODE_EXECUTABLE`，再用 **`Start-Process -UseNewEnvironment`**（全新环境，等价于从开始菜单打开）启动；macOS/Linux 脚本同样 `unset` 这些变量。
+
 ## 手动回滚（不依赖本插件）
 
 ```powershell
@@ -253,6 +259,7 @@ The switch must happen while the app is closed (it holds its own profile directo
 - **Windows launch detail (measured):** `spawn('powershell.exe', …, { detached: true })` creates a process that never runs, so the helper is started as a detached `cmd.exe` running `run.cmd`, which invokes PowerShell with its output redirected to `last-run.log.out`. When the panel shows no log, that transcript is where the reason is.
 - **The helper must not inherit the profile directory as its working directory.** The Desktop app starts its Host with `cwd` set to the profile directory, and a process whose working directory *is* a directory blocks renaming it — the helper would lock its own target and fail with "still locked" even after the app is gone. The launcher sets `cwd` to the plugin state directory, `run.cmd` starts with `cd /d "%~dp0"`, and the script leaves for `$env:TEMP`; the regression test runs the real wrapper from inside the profile directory.
 - **Relaunch robustness:** Electron's single-instance lock can still be held while the old instance exits, so the helper waits for it, remembers the executable path taken from the running app, retries the launch up to three times while waiting for a real window, and brings that window to the front.
+- **A relaunch needs a clean environment.** The Host runs the Electron binary in Node mode (`ELECTRON_RUN_AS_NODE=1`), and a helper that inherits that variable starts a window-less Node process instead of the app: the process appears, quits, and the app never comes back — while starting it by hand from Explorer works. The helper clears those variables and starts the app with `Start-Process -UseNewEnvironment`.
 
 ## Verify
 
