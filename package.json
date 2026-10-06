@@ -3,7 +3,18 @@
   "version": "0.1.0",
   "description": "Make the DeepSeek Harness Desktop app use an existing plugin profile: one-click switch (directory link) with one-click revert.",
   "license": "MIT",
-  "author": "",
+  "author": "2NF",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/2NF/dsh-profile-bridge.git"
+  },
+  "homepage": "https://github.com/2NF/dsh-profile-bridge#readme",
+  "bugs": {
+    "url": "https://github.com/2NF/dsh-profile-bridge/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
   "keywords": [
     "dsh",
     "dsh-plugin",
