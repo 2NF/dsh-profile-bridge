@@ -1,0 +1,151 @@
+#!/bin/sh
+# dsh-profile-bridge — generated helper (macOS / Linux).
+#
+# Runs OUTSIDE the Harness process, because the app holds its profile directory
+# while it runs: it waits for the app to exit, then points <profiles>/<active>
+# at the profile you chose, and optionally relaunches the app.
+#
+# Every value below is written by the plugin; do not edit by hand.
+
+set -u
+
+MODE='__MODE__'                # link | unlink
+PROFILES='__PROFILES__'
+LIVE='__LIVE__'
+TARGET='__TARGET__'
+ACTIVE='__ACTIVENAME__'
+APPEXE='__APPEXE__'
+APPNAME='__APPNAME__'
+LOG='__LOG__'
+STAMP='__STAMP__'
+SKIP_APP_STOP=__SKIPAPPSTOP__
+NO_RELAUNCH=__NORELAUNCH__
+GRACE_SECONDS=__GRACE__
+
+log() {
+  printf '%s %s\n' "$(date '+%Y-%m-%dT%H:%M:%S')" "$*" >>"$LOG" 2>/dev/null || true
+}
+
+mkdir -p "$(dirname "$LOG")" 2>/dev/null || true
+log "start mode=$MODE live=$LIVE target=$TARGET"
+
+stop_app() {
+  if [ "$SKIP_APP_STOP" = "true" ]; then log 'app stop skipped by request'; return 0; fi
+  # Give the page a moment to receive the HTTP response before the app disappears.
+  sleep "$GRACE_SECONDS"
+  if ! pgrep -f "$APPNAME" >/dev/null 2>&1; then log 'app not running'; return 0; fi
+  log 'stopping the app'
+  pkill -f "$APPNAME" 2>/dev/null || true
+  i=0
+  while [ "$i" -lt 40 ]; do
+    pgrep -f "$APPNAME" >/dev/null 2>&1 || break
+    sleep 0.5 2>/dev/null || sleep 1
+    i=$((i + 1))
+  done
+  if pgrep -f "$APPNAME" >/dev/null 2>&1; then log 'warning: the app is still running'; fi
+}
+
+merge_patch() {
+  patch="$TARGET/cordis.patch.yml"
+  [ -f "$patch" ] || return 0
+  if grep -q 'ui-settings-account' "$patch" 2>/dev/null; then
+    log 'patch already carries desktop UI settings'
+    return 0
+  fi
+  cp "$patch" "$patch.bak-$STAMP"
+  cat >>"$patch" <<'PATCH'
+
+# Added by dsh-profile-bridge when the Desktop app took over this profile.
+- id: ui-chat
+  name: "@deepseek-ai/dsh-client-ui-chat"
+  config:
+    transcriptView: standard
+    performanceUsage: detailed
+- id: ui-settings
+  name: "@deepseek-ai/dsh-client-ui-settings"
+  config:
+    enabled: true
+- id: ui-settings-account
+  name: "@deepseek-ai/dsh-client-ui-settings-account"
+  config:
+    version: 1
+    step: done
+    usage: detailed
+    developerTools: true
+    purpose: null
+    process: standard
+    completion: api-key
+PATCH
+  log "merged desktop UI settings into $patch"
+}
+
+relaunch_app() {
+  if [ "$NO_RELAUNCH" = "true" ]; then log 'relaunch skipped by request'; return 0; fi
+  if [ -z "$APPEXE" ] || [ ! -e "$APPEXE" ]; then
+    log 'no app executable known; please start the app manually'
+    return 0
+  fi
+  case "$APPEXE" in
+    *.app) open -a "$APPEXE" >/dev/null 2>&1 || log "failed to open $APPEXE" ;;
+    *) nohup "$APPEXE" >/dev/null 2>&1 & ;;
+  esac
+  log "relaunched $APPEXE"
+}
+
+LIVE_IS_LINK=false
+[ -L "$LIVE" ] && LIVE_IS_LINK=true
+
+case "$MODE" in
+  link)
+    if [ ! -f "$TARGET/package.json" ]; then
+      log "ERROR: target profile has no package.json: $TARGET"
+      exit 1
+    fi
+    stop_app
+    if [ "$LIVE_IS_LINK" = "true" ]; then
+      rm -f "$LIVE"
+      log 'removed the existing link'
+    else
+      if ! mv "$LIVE" "$PROFILES/$ACTIVE.fresh-$STAMP" 2>>"$LOG"; then
+        log "ERROR: cannot rename $LIVE"
+        exit 1
+      fi
+      log "backed up the app profile to $ACTIVE.fresh-$STAMP"
+    fi
+    if ! ln -s "$TARGET" "$LIVE"; then
+      log "ERROR: cannot create the link $LIVE -> $TARGET"
+      [ "$LIVE_IS_LINK" = "true" ] || mv "$PROFILES/$ACTIVE.fresh-$STAMP" "$LIVE" 2>/dev/null || true
+      exit 1
+    fi
+    if [ ! -f "$LIVE/package.json" ]; then
+      rm -f "$LIVE"
+      [ "$LIVE_IS_LINK" = "true" ] || mv "$PROFILES/$ACTIVE.fresh-$STAMP" "$LIVE" 2>/dev/null || true
+      log 'ERROR: link verification failed'
+      exit 1
+    fi
+    log "linked $LIVE -> $TARGET"
+    merge_patch
+    ;;
+  unlink)
+    if [ "$LIVE_IS_LINK" != "true" ]; then
+      log "ERROR: $LIVE is not a link; nothing to revert"
+      exit 1
+    fi
+    stop_app
+    rm -f "$LIVE"
+    backup=$(ls -dt "$PROFILES/$ACTIVE".fresh-* 2>/dev/null | head -n 1)
+    if [ -z "$backup" ]; then
+      log 'ERROR: no backup profile to restore'
+      exit 1
+    fi
+    mv "$backup" "$LIVE"
+    log "restored $(basename "$backup") -> $ACTIVE"
+    ;;
+  *)
+    log "ERROR: unknown mode: $MODE"
+    exit 1
+    ;;
+esac
+
+relaunch_app
+log 'done'

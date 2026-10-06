@@ -1,0 +1,147 @@
+# dsh-profile-bridge — generated helper (Windows).
+#
+# Runs OUTSIDE the Harness process, because the app holds its profile directory
+# while it runs: it waits for the app to exit, then points <profiles>\<active>
+# at the profile you chose, and optionally relaunches the app.
+#
+# Every value below is written by the plugin; do not edit by hand.
+
+$ErrorActionPreference = 'Stop'
+
+$mode         = '__MODE__'          # 'link' | 'unlink'
+$profilesRoot = '__PROFILES__'
+$liveDir      = '__LIVE__'
+$targetDir    = '__TARGET__'
+$activeName   = '__ACTIVENAME__'
+$appExe       = '__APPEXE__'
+$appName      = '__APPNAME__'
+$logPath      = '__LOG__'
+$stamp        = '__STAMP__'
+$skipAppStop  = __SKIPAPPSTOP__
+$noRelaunch   = __NORELAUNCH__
+$graceMs      = __GRACE__
+
+function Write-Log([string] $message) {
+  $line = '{0} {1}' -f (Get-Date).ToString('yyyy-MM-ddTHH:mm:ss'), $message
+  try {
+    $dir = Split-Path -Parent $logPath
+    if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
+    Add-Content -LiteralPath $logPath -Value $line -Encoding UTF8
+  } catch { }
+}
+
+function Get-AppProcesses {
+  @(Get-Process -Name $appName -ErrorAction SilentlyContinue)
+}
+
+function Stop-App {
+  if ($skipAppStop) { Write-Log 'app stop skipped by request'; return }
+  # The page needs a moment to receive the HTTP response before the app disappears.
+  Start-Sleep -Milliseconds $graceMs
+  $processes = Get-AppProcesses
+  if ($processes.Count -eq 0) { Write-Log 'app not running'; return }
+  Write-Log ('stopping {0} app process(es)' -f $processes.Count)
+  $processes | Stop-Process -Force -ErrorAction SilentlyContinue
+  for ($i = 0; $i -lt 40; $i++) {
+    if ((Get-AppProcesses).Count -eq 0) { break }
+    Start-Sleep -Milliseconds 500
+  }
+  $left = (Get-AppProcesses).Count
+  if ($left -gt 0) { Write-Log ('warning: {0} app process(es) still running' -f $left) }
+}
+
+function Remove-Link([string] $path) {
+  # `rmdir` removes a junction or symlink itself and never touches its target.
+  cmd /c rmdir "$path" | Out-Null
+}
+
+function New-Link([string] $path, [string] $target) {
+  New-Item -ItemType Junction -Path $path -Target $target -ErrorAction Stop | Out-Null
+}
+
+function Merge-Patch([string] $target) {
+  $patch = Join-Path $target 'cordis.patch.yml'
+  if (-not (Test-Path $patch)) { return }
+  $text = Get-Content -LiteralPath $patch -Raw
+  if ($text -match 'ui-settings-account') { Write-Log 'patch already carries desktop UI settings'; return }
+  Copy-Item -LiteralPath $patch -Destination ("$patch.bak-$stamp") -Force
+  $addition = "`r`n# Added by dsh-profile-bridge when the Desktop app took over this profile.`r`n- id: ui-chat`r`n  name: `"@deepseek-ai/dsh-client-ui-chat`"`r`n  config:`r`n    transcriptView: standard`r`n    performanceUsage: detailed`r`n- id: ui-settings`r`n  name: `"@deepseek-ai/dsh-client-ui-settings`"`r`n  config:`r`n    enabled: true`r`n- id: ui-settings-account`r`n  name: `"@deepseek-ai/dsh-client-ui-settings-account`"`r`n  config:`r`n    version: 1`r`n    step: done`r`n    usage: detailed`r`n    developerTools: true`r`n    purpose: null`r`n    process: standard`r`n    completion: api-key`r`n"
+  [IO.File]::AppendAllText($patch, $addition, (New-Object Text.UTF8Encoding($false)))
+  Write-Log "merged desktop UI settings into $patch"
+}
+
+function Relaunch-App {
+  if ($noRelaunch) { Write-Log 'relaunch skipped by request'; return }
+  if ([string]::IsNullOrWhiteSpace($appExe) -or -not (Test-Path $appExe)) {
+    Write-Log 'no app executable known; please start the app manually'
+    return
+  }
+  Start-Process -FilePath $appExe | Out-Null
+  Write-Log "relaunched $appExe"
+}
+
+Write-Log ('start mode={0} live={1} target={2}' -f $mode, $liveDir, $targetDir)
+$backupPath = Join-Path $profilesRoot ("{0}.fresh-{1}" -f $activeName, $stamp)
+
+try {
+  Stop-App
+
+  $liveIsLink = $false
+  if (Test-Path $liveDir) {
+    $item = Get-Item -LiteralPath $liveDir -Force -ErrorAction SilentlyContinue
+    $liveIsLink = $null -ne $item -and $item.LinkType -in @('Junction', 'SymbolicLink')
+  }
+
+  if ($mode -eq 'link') {
+    if (-not (Test-Path (Join-Path $targetDir 'package.json'))) {
+      # A junction to a missing target is unusable, so refuse before touching anything.
+      throw "target profile has no package.json: $targetDir"
+    }
+    if ($liveIsLink) {
+      Remove-Link $liveDir
+      Write-Log 'removed the existing link'
+    } else {
+      $renamed = $false
+      for ($i = 0; $i -lt 20; $i++) {
+        try {
+          Rename-Item -LiteralPath $liveDir -NewName (Split-Path $backupPath -Leaf) -ErrorAction Stop
+          $renamed = $true
+          break
+        } catch {
+          Start-Sleep -Milliseconds 500
+        }
+      }
+      if (-not $renamed) { throw "cannot rename $liveDir (still locked)" }
+      Write-Log "backed up the app profile to $(Split-Path $backupPath -Leaf)"
+    }
+
+    New-Link $liveDir $targetDir
+    if (-not (Test-Path (Join-Path $liveDir 'package.json'))) {
+      # Roll back to the profile that worked a moment ago.
+      Remove-Link $liveDir
+      if (-not $liveIsLink) { Rename-Item -LiteralPath $backupPath -NewName $activeName }
+      throw 'link verification failed'
+    }
+    Write-Log "linked $liveDir -> $targetDir"
+    Merge-Patch $targetDir
+  }
+  elseif ($mode -eq 'unlink') {
+    if (-not $liveIsLink) { throw "$liveDir is not a link; nothing to revert" }
+    Remove-Link $liveDir
+    $backup = Get-ChildItem -LiteralPath $profilesRoot -Directory -Filter ("{0}.fresh-*" -f $activeName) -ErrorAction SilentlyContinue |
+      Sort-Object LastWriteTime -Descending | Select-Object -First 1
+    if ($null -eq $backup) { throw 'no backup profile to restore' }
+    Rename-Item -LiteralPath $backup.FullName -NewName $activeName
+    Write-Log "restored $($backup.Name) -> $activeName"
+  }
+  else {
+    throw "unknown mode: $mode"
+  }
+
+  Relaunch-App
+  Write-Log 'done'
+}
+catch {
+  Write-Log ('ERROR: ' + $_.Exception.Message)
+  exit 1
+}
