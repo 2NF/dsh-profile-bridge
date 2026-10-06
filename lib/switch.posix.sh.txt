@@ -27,7 +27,10 @@ log() {
 }
 
 mkdir -p "$(dirname "$LOG")" 2>/dev/null || true
-log "start mode=$MODE live=$LIVE target=$TARGET"
+# Never keep the inherited working directory: the Host may run with the profile
+# directory as its cwd, and a process whose cwd IS a directory blocks renaming it.
+cd / 2>/dev/null || cd "$(dirname "$LOG")" 2>/dev/null || true
+log "start mode=$MODE live=$LIVE target=$TARGET cwd=$(pwd)"
 
 stop_app() {
   if [ "$SKIP_APP_STOP" = "true" ]; then log 'app stop skipped by request'; return 0; fi

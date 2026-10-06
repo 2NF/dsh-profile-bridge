@@ -102,6 +102,29 @@ const runHelper = (request) => {
     { stdio: 'inherit' })
 }
 
+/**
+ * Run the real launcher (the cmd wrapper on Windows) from a deliberately hostile
+ * working directory — the profile directory itself, which is exactly what the
+ * Desktop app hands its Host. The helper must leave that directory before renaming
+ * it, or it locks its own target and the switch fails with "still locked".
+ */
+const runHelperViaLauncher = (request, cwd) => {
+  const rendered = renderHelper({
+    profilesRoot: profilesDir,
+    liveDir,
+    activeName: 'desktop',
+    appExe: '',
+    logPath,
+    stateDir,
+    skipAppStop: true,
+    noRelaunch: true,
+    ...request,
+  })
+  writeHelper(rendered)
+  if (process.platform === 'win32') execFileSync('cmd.exe', ['/c', rendered.wrapperPath], { stdio: 'inherit', cwd })
+  else execFileSync('/bin/sh', [rendered.scriptPath], { stdio: 'inherit', cwd })
+}
+
 // Launcher shape: on Windows the plugin must run the helper through a detached
 // `cmd.exe` (a detached powershell.exe never starts here), and the generated
 // script must carry a UTF-8 BOM so Windows PowerShell reads non-ASCII paths.
@@ -121,10 +144,14 @@ assert.equal(renderHelper({
 console.log('launcher shape: ok')
 
 if (process.platform === 'win32') {
-  // link
-  runHelper({ mode: 'link', targetDir, stamp: 'precheck1' })
+  // link, launched by the real wrapper from inside the profile directory — the
+  // hostile working directory that used to make this fail with "still locked".
+  runHelperViaLauncher({ mode: 'link', targetDir, stamp: 'precheck1' }, liveDir)
   const written = readFileSync(join(stateDir, 'switch.ps1'))
   assert.deepEqual([...written.subarray(0, 3)], [0xef, 0xbb, 0xbf], 'the Windows script must start with a UTF-8 BOM')
+  assert.ok(existsSync(`${logPath}.out`), 'the launcher must write its transcript next to the log')
+  const transcript = readFileSync(logPath, 'utf8')
+  assert.ok(transcript.includes('cwd='), 'the log must record the working directory it started from')
   assert.equal(lstatSync(liveDir).isSymbolicLink(), true, 'the app profile must become a link')
   assert.equal(readLinkTarget(liveDir), resolve(targetDir), 'the link must point at the chosen profile')
   assert.ok(existsSync(join(profilesDir, 'desktop.fresh-precheck1')), 'the previous directory must be kept as a backup')

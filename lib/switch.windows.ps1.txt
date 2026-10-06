@@ -80,7 +80,12 @@ function Relaunch-App {
   Write-Log "relaunched $appExe"
 }
 
-Write-Log ('start mode={0} live={1} target={2}' -f $mode, $liveDir, $targetDir)
+# The Harness Host runs with the profile directory as its working directory, so a
+# helper that inherits it would hold a handle on the very directory it has to
+# rename. Leave it before doing anything else.
+try { Set-Location -LiteralPath $env:TEMP } catch { try { Set-Location -LiteralPath (Split-Path -Parent $logPath) } catch { } }
+
+Write-Log ('start mode={0} live={1} target={2} cwd={3}' -f $mode, $liveDir, $targetDir, (Get-Location).Path)
 $backupPath = Join-Path $profilesRoot ("{0}.fresh-{1}" -f $activeName, $stamp)
 
 try {
@@ -102,16 +107,26 @@ try {
       Write-Log 'removed the existing link'
     } else {
       $renamed = $false
-      for ($i = 0; $i -lt 20; $i++) {
+      $lastError = ''
+      for ($i = 0; $i -lt 60; $i++) {
         try {
           Rename-Item -LiteralPath $liveDir -NewName (Split-Path $backupPath -Leaf) -ErrorAction Stop
           $renamed = $true
           break
         } catch {
+          $lastError = $_.Exception.Message
           Start-Sleep -Milliseconds 500
         }
       }
-      if (-not $renamed) { throw "cannot rename $liveDir (still locked)" }
+      if (-not $renamed) {
+        # Name whatever could still hold the directory, so a failure is diagnosable
+        # instead of a bare "still locked".
+        $holders = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+          Where-Object { $_.CommandLine -and $_.CommandLine.Contains($liveDir) } |
+          Select-Object -First 5 | ForEach-Object { '{0}({1})' -f $_.Name, $_.ProcessId })
+        Write-Log ('rename blocked by: ' + $(if ($holders.Count -gt 0) { $holders -join ', ' } else { 'no process names this path' }))
+        throw "cannot rename ${liveDir}: $lastError"
+      }
       Write-Log "backed up the app profile to $(Split-Path $backupPath -Leaf)"
     }
 
@@ -143,5 +158,7 @@ try {
 }
 catch {
   Write-Log ('ERROR: ' + $_.Exception.Message)
+  # The app was stopped earlier in this run: never leave the user with a closed app.
+  Relaunch-App
   exit 1
 }

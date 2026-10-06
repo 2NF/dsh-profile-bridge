@@ -146,6 +146,20 @@ pnpm now wants to use the store at "...\pnpm\store\v11" ...
 
 排错时看两个日志：`last-run.log`（脚本的结构化日志）和 **`last-run.log.out`**（PowerShell 自身的输出——脚本连第一行都没跑到时，原因在这里）。设置页的「上次操作日志」会自动显示有内容的那个。
 
+**4. helper 的工作目录会锁住它自己要改名的目录**
+
+桌面版启动宿主时用的是 **`cwd = profile 目录`**（`@deepseek-ai/dsh-desktop` 的 `main.js`：`cwd: this.projectDir`）。插件 spawn 出去的 helper 会继承这个工作目录，于是出现最反直觉的一种失败：**应用已完全退出、目录里没有任何别的进程，改名依然报 `still locked`** —— 因为 helper 自己就站在那个目录里，持有它的句柄。
+
+三重防护：
+
+| 位置 | 做法 |
+|---|---|
+| `lib/helper.mjs` | spawn 时显式指定 `cwd` 为插件状态目录（`<DSH_HOME>/profile-bridge`） |
+| `run.cmd` | 第一行 `cd /d "%~dp0"`，先离开继承来的目录 |
+| `switch.ps1` / `switch.sh` | 开头 `Set-Location $env:TEMP` / `cd /`，并把启动时的 `cwd=` 写进日志 |
+
+失败时脚本还会列出**仍提到该路径的进程**（`rename blocked by: …`），并且无论成功失败都会把应用重新拉起来。自检里加了回归用例：**故意把工作目录设为 profile 目录**，再执行真实包装脚本，必须仍然切换成功。
+
 ## 手动回滚（不依赖本插件）
 
 ```powershell
@@ -225,6 +239,7 @@ The switch must happen while the app is closed (it holds its own profile directo
 - macOS/Linux use the symlink path; the same logic, but **not verified on real hardware** yet.
 - The plugin lives in a profile, so install it in both profiles if you want the page after switching.
 - **Windows launch detail (measured):** `spawn('powershell.exe', …, { detached: true })` creates a process that never runs, so the helper is started as a detached `cmd.exe` running `run.cmd`, which invokes PowerShell with its output redirected to `last-run.log.out`. When the panel shows no log, that transcript is where the reason is.
+- **The helper must not inherit the profile directory as its working directory.** The Desktop app starts its Host with `cwd` set to the profile directory, and a process whose working directory *is* a directory blocks renaming it — the helper would lock its own target and fail with "still locked" even after the app is gone. The launcher sets `cwd` to the plugin state directory, `run.cmd` starts with `cd /d "%~dp0"`, and the script leaves for `$env:TEMP`; the regression test runs the real wrapper from inside the profile directory.
 
 ## Verify
 
