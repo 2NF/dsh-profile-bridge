@@ -144,8 +144,10 @@ assert.equal(renderHelper({
 console.log('launcher shape: ok')
 
 // The POSIX template is never executed on Windows, so at least parse it with a real
-// shell whenever one is available.
-try {
+// shell whenever one is available. A shell that cannot run at all (Windows ships a
+// `bash` that is only a WSL relay, for example) means "not checked", not "broken";
+// only an actual parse failure fails this suite.
+{
   const posix = renderHelper({
     profilesRoot: '/tmp/p/profiles', liveDir: '/tmp/p/profiles/desktop', activeName: 'desktop',
     targetDir: '/tmp/p/profiles/web', appExe: '/Applications/DeepSeek Harness.app',
@@ -154,11 +156,37 @@ try {
   })
   const posixPath = join(sandbox, 'posix-syntax-check.sh')
   writeFileSync(posixPath, posix.text, 'utf8')
-  execFileSync('bash', ['-n', posixPath], { stdio: 'inherit' })
-  console.log('posix syntax: ok')
-} catch (error) {
-  if (error?.code === 'ENOENT') console.log('posix syntax: skipped (no bash on PATH)')
-  else throw error
+  // Git for Windows ships a real bash next to git itself; prefer it over a `bash`
+  // that may only be a WSL relay.
+  const candidates = []
+  try {
+    const execPath = execFileSync('git', ['--exec-path'], { encoding: 'utf8' }).trim()
+    for (const relative of [['..', '..', '..', 'bin', 'bash.exe'], ['..', '..', 'bin', 'bash.exe'], ['..', '..', 'usr', 'bin', 'bash.exe']]) {
+      candidates.push(join(execPath, ...relative))
+    }
+  } catch { /* git is optional here */ }
+  candidates.push('bash', 'sh')
+  let checked = false
+  let attempted = false
+  for (const shell of candidates) {
+    try {
+      execFileSync(shell, ['-n', posixPath], { stdio: 'pipe' })
+      console.log(`posix syntax: ok (${shell})`)
+      checked = true
+      break
+    } catch (error) {
+      if (error?.code === 'ENOENT') continue
+      attempted = true
+      const detail = String(error?.stderr ?? error?.message ?? '')
+      if (/syntax error|unexpected (token|EOF)|parse error/iu.test(detail)) {
+        console.error(detail.trim())
+        throw new Error(`the POSIX helper script does not parse: ${detail.split('\n')[0]}`)
+      }
+      console.log(`posix syntax: skipped (${shell} unusable: ${detail.trim().split('\n')[0].slice(0, 90)})`)
+      break
+    }
+  }
+  if (!checked && !attempted) console.log('posix syntax: skipped (no usable POSIX shell)')
 }
 
 if (process.platform === 'win32') {
