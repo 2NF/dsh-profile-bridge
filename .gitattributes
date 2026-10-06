@@ -1,0 +1,6 @@
+# Keep every text file LF in the repository: the POSIX helper template must keep a
+# usable shebang on macOS/Linux, and a junction/symlink switch script must never be
+# rewritten by a checkout.
+* text=auto eol=lf
+*.png binary
+*.jpg binary

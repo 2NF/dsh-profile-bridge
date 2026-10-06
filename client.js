@@ -43,6 +43,7 @@ window.__ModuleLoader__.load({
       logEmpty: '（还没有日志）',
       why: '桌面版把 profile 目录写死为 <DSH_HOME>/profiles/desktop，所以它看不到你其他 profile 里的插件。本页通过目录链接（Windows 用 junction，macOS/Linux 用符号链接）把两者接起来，原目录会先备份，随时可还原。',
       mustClose: '注意：切换需要关闭应用才能改目录，脚本会自动完成关闭与重启。',
+      how: '工作原理',
     }
     const en = {
       section: 'Profiles',
@@ -71,6 +72,7 @@ window.__ModuleLoader__.load({
       logEmpty: '(no log yet)',
       why: 'The Desktop app hardcodes its profile directory to <DSH_HOME>/profiles/desktop, so plugins installed in your other profiles are invisible to it. This page links the two (a junction on Windows, a symlink elsewhere); the previous directory is backed up first and can be restored at any time.',
       mustClose: 'Note: the switch needs the app closed to move the directory, so the helper closes and restarts it for you.',
+      how: 'How it works',
     }
 
     const styles = {
@@ -239,7 +241,7 @@ window.__ModuleLoader__.load({
         ),
 
         h('details', null,
-          h('summary', { style: { cursor: 'pointer', opacity: 0.8 } }, 'How it works'),
+          h('summary', { style: { cursor: 'pointer', opacity: 0.8 } }, t('how')),
           h('p', { style: { ...styles.muted, margin: '8px 0 0' } }, t('why')),
           h('p', { style: { ...styles.muted, margin: 0 } }, t('mustClose')),
         ),
