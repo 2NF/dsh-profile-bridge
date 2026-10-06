@@ -89,7 +89,6 @@ const runHelper = (request) => {
     logPath,
     stateDir,
     skipAppStop: true,
-    noRelaunch: true,
     ...request,
   })
   writeHelper(rendered)
@@ -117,7 +116,6 @@ const runHelperViaLauncher = (request, cwd) => {
     logPath,
     stateDir,
     skipAppStop: true,
-    noRelaunch: true,
     ...request,
   })
   writeHelper(rendered)
@@ -137,17 +135,16 @@ assert.ok(windowsRender.wrapperPath?.endsWith('run.cmd'), 'the Windows launcher 
 assert.ok(windowsRender.wrapper.includes('-File'), 'the wrapper must run the script with -File')
 assert.ok(windowsRender.wrapper.includes('switch.ps1'), 'the wrapper must name the generated script')
 assert.ok(windowsRender.wrapper.includes('2>&1'), 'the wrapper must capture PowerShell startup errors')
-// The Host runs the Electron binary in Node mode, so a relaunch must not inherit that
-// environment: with ELECTRON_RUN_AS_NODE set, starting the app executable produces a
-// window-less Node process and the app never comes back.
-assert.ok(windowsRender.text.includes('ELECTRON_RUN_AS_NODE'), 'the helper must clear the Node-mode environment before relaunching the app')
-assert.ok(windowsRender.text.includes('-UseNewEnvironment'), 'the relaunch must start the app with a fresh environment')
-// A Host that cannot bind the port its predecessor served dies during startup, so the
-// helper waits for the socket and verifies the relaunch actually came up.
-assert.ok(windowsRender.text.includes('Wait-PortFree'), 'the helper must wait for the app port to be released')
-assert.ok(windowsRender.text.includes('Test-AppHealthy'), 'the relaunch must check the window and the port, not just a process')
-assert.ok(windowsRender.text.includes('did not come up healthy; clearing it'), 'a failed attempt must be cleared before the next one')
-assert.ok(windowsRender.text.includes('which is not the app; leaving it alone'), 'the helper must never kill a process that merely holds a port')
+// The app is closed by the switch and deliberately NOT reopened: an automatic relaunch
+// proved unreliable (Node-mode environment, single-instance lock, a port the next Host
+// could not bind), so the generated helper must never try it and must say so.
+assert.ok(!windowsRender.text.includes('Relaunch'), 'the generated helper must not relaunch the app')
+assert.ok(!windowsRender.text.includes('Start-Process -FilePath'), 'the generated helper must not start the app')
+assert.ok(windowsRender.text.includes('open it yourself'), 'the helper must tell the user to open the app')
+assert.ok(renderHelper({
+  profilesRoot: profilesDir, liveDir, activeName: 'desktop', targetDir, appExe: '',
+  logPath, stateDir, stamp: 'shape', platform: 'linux',
+}).text.includes('open it yourself'), 'the POSIX helper must tell the user to open the app')
 assert.equal(renderHelper({
   profilesRoot: profilesDir, liveDir, activeName: 'desktop', targetDir, appExe: '',
   logPath, stateDir, stamp: 'shape', platform: 'linux',
@@ -201,19 +198,6 @@ console.log('launcher shape: ok')
 }
 
 if (process.platform === 'win32') {
-  // The generated script's own self-test: it opens a listener and checks that the port
-  // helpers report it as busy and then free. Without this, "the app could not bind its
-  // port" would only ever show up on a real machine.
-  const selfTest = renderHelper({
-    profilesRoot: profilesDir, liveDir, activeName: 'desktop', targetDir, appExe: '',
-    logPath, stateDir, stamp: 'selftest', skipAppStop: true, noRelaunch: true,
-  })
-  writeHelper(selfTest)
-  execFileSync('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', selfTest.scriptPath],
-    { stdio: 'inherit', env: { ...process.env, PROFILE_BRIDGE_SELFTEST: '1' } })
-  assert.ok(readFileSync(logPath, 'utf8').includes('selftest ok'), 'the generated script must pass its own port self-test')
-  console.log('helper selftest: ok')
-
   // link, launched by the real wrapper from inside the profile directory — the
   // hostile working directory that used to make this fail with "still locked".
   runHelperViaLauncher({ mode: 'link', targetDir, stamp: 'precheck1' }, liveDir)

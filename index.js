@@ -73,7 +73,6 @@ function runSwitch(mode, paths, payload) {
     stamp: stamp(),
     stateDir: paths.stateDir,
     skipAppStop: request.skipAppStop === true,
-    noRelaunch: request.noRelaunch === true,
   })
   writeHelper(rendered)
   const pid = launchHelper(rendered)
@@ -87,10 +86,11 @@ function runSwitch(mode, paths, payload) {
     logPath,
     appExe,
     pid,
+    // The app is closed to unlock its profile directory, and it is NOT reopened: the
+    // user opens it again. See the README for why the relaunch was removed.
     closesApp: request.skipAppStop !== true,
-    note: request.skipAppStop === true
-      ? 'Helper started without stopping the app (test mode).'
-      : 'The app closes by itself in a moment and reopens with the chosen profile.',
+    reopensApp: false,
+    outcome: request.skipAppStop === true ? 'helper-started-without-closing' : 'app-closed-open-it-yourself',
   }
 }
 

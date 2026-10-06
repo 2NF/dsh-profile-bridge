@@ -1,8 +1,9 @@
 # dsh-profile-bridge — generated helper (Windows).
 #
-# Runs OUTSIDE the Harness process, because the app holds its profile directory
-# while it runs: it waits for the app to exit, then points <profiles>\<active>
-# at the profile you chose, and optionally relaunches the app.
+# Runs OUTSIDE the Harness process, because the app holds its profile directory while
+# it runs: it stops the app, points <profiles>\<active> at the profile you chose, and
+# then leaves it to you to open the app again. It deliberately does NOT restart the
+# app (see the README: "why there is no automatic relaunch").
 #
 # Every value below is written by the plugin; do not edit by hand.
 
@@ -13,19 +14,11 @@ $profilesRoot = '__PROFILES__'
 $liveDir      = '__LIVE__'
 $targetDir    = '__TARGET__'
 $activeName   = '__ACTIVENAME__'
-$appExe       = '__APPEXE__'
 $appName      = '__APPNAME__'
 $logPath      = '__LOG__'
 $stamp        = '__STAMP__'
 $skipAppStop  = __SKIPAPPSTOP__
-$noRelaunch   = __NORELAUNCH__
 $graceMs      = __GRACE__
-
-# Filled in from the running app before it is stopped; preferred for the relaunch.
-$script:resolvedAppExe = ''
-# Ports the app's Host was serving on; the next Host cannot bind them until they are
-# really released, and binding too early kills the whole startup.
-$script:appPorts = @()
 
 function Write-Log([string] $message) {
   $line = '{0} {1}' -f (Get-Date).ToString('yyyy-MM-ddTHH:mm:ss'), $message
@@ -40,130 +33,24 @@ function Get-AppProcesses {
   @(Get-Process -Name $appName -ErrorAction SilentlyContinue)
 }
 
-# Which TCP ports a set of processes is listening on.
-function Get-AppListenPorts([object[]] $processes) {
-  $ids = @($processes | ForEach-Object { $_.Id })
-  if ($ids.Count -eq 0) { return @() }
-  $ports = @()
-  try {
-    $ports = @(Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue |
-      Where-Object { $ids -contains $_.OwningProcess } |
-      Select-Object -ExpandProperty LocalPort -Unique)
-  } catch { }
-  if ($ports.Count -eq 0) {
-    # `netstat -ano` fallback for hosts without the NetTCPIP module.
-    try {
-      foreach ($line in @(netstat -ano | Select-String 'LISTENING')) {
-        $parts = @(($line.Line -split '\s+') | Where-Object { $_ -ne '' })
-        if ($parts.Count -ge 5 -and $ids -contains [int]$parts[4]) {
-          $ports += [int](($parts[1] -split ':')[-1])
-        }
-      }
-    } catch { }
-  }
-  return @($ports | Sort-Object -Unique)
-}
-
-# Which process (if any) currently listens on a port; 0 means free.
-function Get-PortOwner([int] $port) {
-  try {
-    $connection = Get-NetTCPConnection -State Listen -LocalPort $port -ErrorAction SilentlyContinue | Select-Object -First 1
-    if ($null -ne $connection) { return [int]$connection.OwningProcess }
-  } catch { }
-  try {
-    foreach ($line in @(netstat -ano | Select-String (':' + $port + '\s'))) {
-      $parts = @(($line.Line -split '\s+') | Where-Object { $_ -ne '' })
-      if ($parts.Count -ge 5 -and $parts[3] -eq 'LISTENING') { return [int]$parts[4] }
-    }
-  } catch { }
-  return 0
-}
-
-# Wait until nothing listens on these ports any more.
-function Wait-PortFree([int[]] $ports, [int] $timeoutSeconds) {
-  if (@($ports).Count -eq 0) { return $true }
-  $deadline = (Get-Date).AddSeconds($timeoutSeconds)
-  while ((Get-Date) -lt $deadline) {
-    $busy = @($ports | Where-Object { (Get-PortOwner $_) -ne 0 })
-    if ($busy.Count -eq 0) { return $true }
-    Start-Sleep -Milliseconds 500
-  }
-  return $false
-}
-
-function Format-PortOwners([int[]] $ports) {
-  $parts = @()
-  foreach ($port in @($ports)) {
-    $owner = Get-PortOwner $port
-    if ($owner -ne 0) {
-      $name = try { (Get-Process -Id $owner -ErrorAction Stop).ProcessName } catch { 'unknown' }
-      $parts += ('{0}<-{1}({2})' -f $port, $name, $owner)
-    }
-  }
-  if ($parts.Count -eq 0) { return 'none' }
-  return ($parts -join ', ')
-}
-
-# A relaunch only counts as successful when the app shows a window AND its Host is
-# serving again; a window alone can be the "unavailable" dialog.
-function Test-AppHealthy([int[]] $ports) {
-  $window = Get-AppProcesses | Where-Object { $_.MainWindowHandle -ne 0 } | Select-Object -First 1
-  if ($null -eq $window) { return $null }
-  if (@($ports).Count -gt 0) {
-    if (@($ports | Where-Object { (Get-PortOwner $_) -ne 0 }).Count -eq 0) { return $null }
-  }
-  return $window
-}
-
 function Stop-App {
   if ($skipAppStop) { Write-Log 'app stop skipped by request'; return }
   # The page needs a moment to receive the HTTP response before the app disappears.
   Start-Sleep -Milliseconds $graceMs
   $processes = Get-AppProcesses
   if ($processes.Count -eq 0) { Write-Log 'app not running'; return }
-  # Remember where the app really lives: relaunching must not depend on a guess
-  # made before the app was stopped.
   $captured = $processes | Where-Object { $_.Path } | Select-Object -First 1 -ExpandProperty Path
-  if (-not [string]::IsNullOrWhiteSpace($captured)) {
-    $script:resolvedAppExe = $captured
-    Write-Log "app executable: $captured"
-  }
-  $script:appPorts = Get-AppListenPorts $processes
-  if ($script:appPorts.Count -gt 0) { Write-Log ('app is serving on port(s): ' + ($script:appPorts -join ', ')) }
+  if (-not [string]::IsNullOrWhiteSpace($captured)) { Write-Log "app executable: $captured" }
   Write-Log ('stopping {0} app process(es)' -f $processes.Count)
   $processes | Stop-Process -Force -ErrorAction SilentlyContinue
-  for ($i = 0; $i -lt 40; $i++) {
+  for ($i = 0; $i -lt 60; $i++) {
     if ((Get-AppProcesses).Count -eq 0) { break }
     Start-Sleep -Milliseconds 500
   }
   $left = (Get-AppProcesses).Count
   if ($left -gt 0) { Write-Log ('warning: {0} app process(es) still running' -f $left) }
-  # A new Host that cannot bind the port the old one served dies during startup with
-  # "listen ... 127.0.0.1:<port>" and the app shows its "unavailable" dialog, so wait
-  # for the socket to be released instead of just waiting for the processes.
-  if (-not (Wait-PortFree $script:appPorts 30)) {
-    Write-Log ('warning: port(s) still held after 30s: ' + (Format-PortOwners $script:appPorts))
-    foreach ($port in @($script:appPorts)) {
-      $owner = Get-PortOwner $port
-      if ($owner -eq 0) { continue }
-      # Only ever clear a leftover of this app: a program that merely happens to hold
-      # the port is not ours to kill.
-      $ownerName = try { (Get-Process -Id $owner -ErrorAction Stop).ProcessName } catch { '' }
-      if ($ownerName -ne $appName) {
-        Write-Log ("port $port is held by $ownerName (pid $owner), which is not the app; leaving it alone")
-        continue
-      }
-      try {
-        Stop-Process -Id $owner -Force -ErrorAction Stop
-        Write-Log ("cleared the leftover app process holding port $port (pid $owner)")
-      } catch {
-        Write-Log ("could not clear the process holding port $port (pid $owner): " + $_.Exception.Message)
-      }
-    }
-    [void](Wait-PortFree $script:appPorts 10)
-  }
-  # Electron releases its single-instance lock as it exits; starting the next
-  # instance too early makes it hand over to the dying one and exit silently.
+  # The profile directory and the single-instance lock are released as the app exits;
+  # give the OS a moment so the rename below cannot race a dying process.
   Start-Sleep -Seconds 2
 }
 
@@ -187,93 +74,9 @@ function Merge-Patch([string] $target) {
   Write-Log "merged desktop UI settings into $patch"
 }
 
-# Bring that window to the foreground so the switch visibly ends with the app back
-# on screen instead of hidden behind other windows.
-function Bring-AppToFront($process) {
-  if ($null -eq $process) { return }
-  try {
-    Add-Type -ErrorAction Stop -Namespace ProfileBridge -Name User32 -MemberDefinition @'
-[System.Runtime.InteropServices.DllImport("user32.dll")] public static extern bool ShowWindow(System.IntPtr hWnd, int nCmdShow);
-[System.Runtime.InteropServices.DllImport("user32.dll")] public static extern bool SetForegroundWindow(System.IntPtr hWnd);
-'@
-    [void][ProfileBridge.User32]::ShowWindow($process.MainWindowHandle, 9)
-    [void][ProfileBridge.User32]::SetForegroundWindow($process.MainWindowHandle)
-    Write-Log 'brought the app window to the front'
-  } catch {
-    Write-Log ('could not focus the app window: ' + $_.Exception.Message)
-  }
-}
-
-function Relaunch-App {
-  if ($noRelaunch) { Write-Log 'relaunch skipped by request'; return }
-  # Prefer the executable captured from the running app; fall back to the path the
-  # plugin resolved before the switch.
-  $exe = $appExe
-  if (-not [string]::IsNullOrWhiteSpace($script:resolvedAppExe)) { $exe = $script:resolvedAppExe }
-  if ([string]::IsNullOrWhiteSpace($exe) -or -not (Test-Path $exe)) {
-    Write-Log 'no app executable known; please start the app manually'
-    return
-  }
-  # The Harness Host runs as the Electron binary in Node mode
-  # (ELECTRON_RUN_AS_NODE=1) and this helper inherited that environment. Starting
-  # the app with those variables still set launches a window-less Node process
-  # instead of the app - the classic "it never came back" symptom. Drop them first.
-  $cleared = @()
-  foreach ($name in @('ELECTRON_RUN_AS_NODE', 'ELECTRON_NO_ATTACH_CONSOLE', 'ELECTRON_FORCE_IS_PACKAGED', 'NODE_OPTIONS', 'DSH_DESKTOP_NODE_EXECUTABLE')) {
-    if (Test-Path -LiteralPath ('Env:' + $name)) {
-      Remove-Item -LiteralPath ('Env:' + $name) -ErrorAction SilentlyContinue
-      $cleared += $name
-    }
-  }
-  if ($cleared.Count -gt 0) { Write-Log ('cleared for the relaunch: ' + ($cleared -join ', ')) }
-  for ($attempt = 1; $attempt -le 3; $attempt++) {
-    [void](Wait-PortFree $script:appPorts 20)
-    Start-Process -FilePath $exe -UseNewEnvironment | Out-Null
-    Write-Log ('relaunch attempt {0}: started {1}' -f $attempt, $exe)
-    $window = $null
-    $deadline = (Get-Date).AddSeconds(25)
-    while ((Get-Date) -lt $deadline) {
-      $window = Test-AppHealthy $script:appPorts
-      if ($null -ne $window) { break }
-      Start-Sleep -Milliseconds 500
-    }
-    if ($null -ne $window) {
-      Write-Log ('app is up and serving (pid {0})' -f $window.Id)
-      Bring-AppToFront $window
-      return
-    }
-    # A failed attempt usually means the app came up broken (typically its
-    # "unavailable" dialog because a port was still taken). Clear it before the next
-    # try, otherwise every attempt collides with the previous one.
-    Write-Log ('attempt {0} did not come up healthy; clearing it before the next try' -f $attempt)
-    Stop-App
-    Start-Sleep -Seconds 2
-  }
-  Write-Log 'the app did not come back on its own; please start it manually'
-}
-
-# Self-test hook: with PROFILE_BRIDGE_SELFTEST=1 the script exercises its own port
-# helpers against a listener it owns and exits. A regression here then fails the test
-# suite instead of appearing later as an app that cannot bind its port.
-if ($env:PROFILE_BRIDGE_SELFTEST -eq '1') {
-  $listener = New-Object Net.Sockets.TcpListener([Net.IPAddress]::Loopback, 0)
-  $listener.Start()
-  $probePort = ([Net.IPEndPoint]$listener.LocalEndpoint).Port
-  $busyWhileListening = -not (Wait-PortFree @($probePort) 2)
-  $listener.Stop()
-  $freeAfterStop = Wait-PortFree @($probePort) 10
-  $healthyWithoutWindow = $null -eq (Test-AppHealthy @($probePort))
-  if ($busyWhileListening -and $freeAfterStop -and $healthyWithoutWindow) {
-    Write-Log 'selftest ok: port wait and health check behave'
-    exit 0
-  }
-  Write-Log ('selftest FAILED busy={0} free={1} noWindow={2}' -f $busyWhileListening, $freeAfterStop, $healthyWithoutWindow)
-  exit 1
-}
-
 # The Harness Host runs with the profile directory as its working directory, so a
-# helper that inherits it would hold a handle on the very directory it has to
-# rename. Leave it before doing anything else.
+# helper that inherits it would hold a handle on the very directory it has to rename.
+# Leave it before doing anything else.
 try { Set-Location -LiteralPath $env:TEMP } catch { try { Set-Location -LiteralPath (Split-Path -Parent $logPath) } catch { } }
 
 Write-Log ('start mode={0} live={1} target={2} cwd={3}' -f $mode, $liveDir, $targetDir, (Get-Location).Path)
@@ -344,12 +147,11 @@ try {
     throw "unknown mode: $mode"
   }
 
-  Relaunch-App
   Write-Log 'done'
+  Write-Log 'the app stays closed on purpose - open it yourself to use the new profile'
 }
 catch {
   Write-Log ('ERROR: ' + $_.Exception.Message)
-  # The app was stopped earlier in this run: never leave the user with a closed app.
-  Relaunch-App
+  Write-Log 'the app stays closed - open it yourself'
   exit 1
 }

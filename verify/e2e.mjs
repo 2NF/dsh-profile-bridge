@@ -4,10 +4,10 @@
  *
  * `verify/precheck.mjs` proves the logic in a throwaway sandbox, but several bugs so
  * far only appeared on a real machine (a detached PowerShell that never starts, the
- * profile directory locking itself, the Node-mode environment, a port still held by
- * the previous Host). This script runs exactly the production path — render, write,
- * launch detached — against the real profiles, which means **it closes and relaunches
- * the Desktop app**.
+ * profile directory locking itself, the Node-mode environment). This script runs
+ * exactly the production path — render, write, launch detached — against the real
+ * profiles, which means **it closes the Desktop app**. The switch does not reopen it,
+ * so start the app yourself once the helper has finished.
  *
  *   node verify/e2e.mjs unlink --yes        # link  -> standalone profile
  *   node verify/e2e.mjs link web --yes      # standalone -> profile "web"
@@ -77,4 +77,4 @@ const rendered = renderHelper({
 })
 writeHelper(rendered)
 const pid = launchHelper(rendered)
-console.log(`helper launched (pid ${pid ?? 'unknown'}) — the app is about to close and come back`)
+console.log(`helper launched (pid ${pid ?? 'unknown'}) — the app is about to close; open it yourself when the helper is done`)

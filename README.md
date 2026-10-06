@@ -73,8 +73,8 @@ ln -s /path/to/dsh-profile-bridge ~/.dsh/profiles/desktop/node_modules/dsh-profi
 
 1. 打开 **设置 → 配置档案**，页面会列出 `$DSH_HOME/profiles` 下所有 profile，并标出当前正在用的那个。
 2. 选中要用的 profile（例如 `web`），点 **使用它**。
-3. 应用会在两秒内自动关闭、完成目录切换、再自动打开 —— 打开后就是你的插件集合。
-4. 想回去就点 **还原为独立 profile**（会删除链接并把切换前的目录恢复回来）。
+3. 应用会在两秒内**自动关闭**，脚本完成目录切换 —— **它不会自动打开**，请你自己双击打开桌面版，打开后就是你的插件集合。
+4. 想回去就点 **还原为独立 profile**（会删除链接并把切换前的目录恢复回来），同样需要你自己重新打开应用。
 
 同页面还会显示：依赖数 / bundle 数 / `node_modules` 是否存在（切换前的体检）、上次操作日志、"工作原理"说明。
 
@@ -86,7 +86,8 @@ ln -s /path/to/dsh-profile-bridge ~/.dsh/profiles/desktop/node_modules/dsh-profi
 点击「使用它」
    └─ Host 半边校验目标 profile，渲染一个平台脚本到 <DSH_HOME>/profile-bridge/
         └─ 以独立进程（detached）启动它 → 立即返回结果给页面
-             └─ 脚本：等应用退出 → 改名备份 → 建 junction/symlink → 合并界面设置 → 重启应用
+             └─ 脚本：关闭应用 → 改名备份 → 建 junction/symlink → 合并界面设置 → 结束
+                  （不重启应用：请你自己打开）
 ```
 
 细节（都是踩过的坑）：
@@ -97,13 +98,13 @@ ln -s /path/to/dsh-profile-bridge ~/.dsh/profiles/desktop/node_modules/dsh-profi
 | 链接 | Windows 用目录 junction（`New-Item -ItemType Junction`），macOS/Linux 用 `ln -s` |
 | 二次切换 | 已经是链接时直接删除旧链接再建新的，不会叠加备份 |
 | 失败回滚 | 建链接后立刻校验目标 `package.json` 可读；失败就删链接、把备份改回来 |
-| 界面设置 | 把桌面版首次运行写入的 `ui-chat` / `ui-settings` / `ui-settings-account` 三行并入目标 profile 的 `cordis.patch.yml`，避免重启后又走一遍引导（原文件备份为 `.bak-<时间戳>`） |
+| 界面设置 | 把桌面版首次运行写入的 `ui-chat` / `ui-settings` / `ui-settings-account` 三行并入目标 profile 的 `cordis.patch.yml`，避免重开后又走一遍引导（原文件备份为 `.bak-<时间戳>`） |
 | 日志 | `<DSH_HOME>/profile-bridge/last-run.log`，页面内可查看 |
 | 安全 | 脚本永不 `rm -rf`：删除链接用 `rmdir`/`rm -f`（只删链接本身），其余一律"改名" |
 
 ## 限制与注意事项
 
-- **切换需要关闭应用**，这是操作系统的目录占用限制，不是插件的选择。脚本会自动完成关闭+重启；如果你想自己控制，可以用 `skipAppStop`/`noRelaunch` 参数调用 `link`/`unlink` 端点（测试模式），脚本会等你手动重启。
+- **切换需要关闭应用**，这是操作系统的目录占用限制，不是插件的选择。脚本替你关闭应用，**但不会替你重新打开**（原因见下面"为什么没有自动重开"）。用 `skipAppStop: true` 调用 `link`/`unlink` 端点可以连关闭都交给你自己（测试模式）。
 - **不要同时运行**桌面版和命令行 `dsh --profile <同一个 profile>`：两个进程共享同一份 `node_modules` 与锁文件。
 - macOS / Linux 走符号链接路径，逻辑与 Windows 相同，但**未在真机验证**（欢迎反馈 Issue / PR）。
 - 只有**桌面版**需要这个链接。命令行用户直接 `dsh --profile <名称>` 就好，本页会提示这一点并且不提供按钮。
@@ -158,46 +159,19 @@ pnpm now wants to use the store at "...\pnpm\store\v11" ...
 | `run.cmd` | 第一行 `cd /d "%~dp0"`，先离开继承来的目录 |
 | `switch.ps1` / `switch.sh` | 开头 `Set-Location $env:TEMP` / `cd /`，并把启动时的 `cwd=` 写进日志 |
 
-失败时脚本还会列出**仍提到该路径的进程**（`rename blocked by: …`），并且无论成功失败都会把应用重新拉起来。自检里加了回归用例：**故意把工作目录设为 profile 目录**，再执行真实包装脚本，必须仍然切换成功。
+失败时脚本还会列出**仍提到该路径的进程**（`rename blocked by: …`）。自检里加了回归用例：**故意把工作目录设为 profile 目录**，再执行真实包装脚本，必须仍然切换成功。
 
-**5. "切换成功，但应用没有自动回来"**
+**5. 为什么没有自动重开（v0.2.0 起直接移除）**
 
-helper 本来就会重启应用，但 **Electron 的单实例锁**在退出瞬间仍可能被旧实例持有：新实例会把启动请求转交给那个正在退出的进程，然后自己退出 —— 表现出来就是"应用没回来"。现在：
+早期版本会在切换后自己把应用拉起来，为此踩了三个坑，最终决定不做这件事 —— **由用户自己打开应用**：
 
-| 措施 | 说明 |
+| 踩到的坑 | 现象 |
 |---|---|
-| 退出后等待 | `Stop-App` 杀完进程后**再等 2 秒**，给单实例锁释放留时间 |
-| 记录真实路径 | 从**正在运行的应用进程**里取可执行文件路径（不再依赖事先猜测的路径） |
-| 多次重试 | `Relaunch-App` 最多启动 3 次，每次**等待窗口真正出现**（最长 20 秒） |
-| 带到前台 | 窗口出现后用 `ShowWindow` + `SetForegroundWindow` 把它**提到最前** |
-| 明确失败 | 三次都没起来就写"请手动启动应用"，不静默失败 |
+| **Node 模式环境变量** | 宿主是以 `ELECTRON_RUN_AS_NODE=1` 运行的 Electron，helper 继承后启动 `DeepSeek Harness.exe`，Electron 变成**无窗口的 Node 进程**：进程起来、几秒后退出、界面永不出现（而从开始菜单双击就正常） |
+| **端口未释放** | 新宿主绑定不了上一个宿主还在用的端口（崩溃日志：`webserver (required): listen UNKNOWN … 127.0.0.1:19387`），启动审计失败 → 应用弹"The application could not start or stopped unexpectedly" |
+| **单实例锁竞争** | 旧实例还没退干净，新实例会把启动请求转交给它然后自己退出，看起来就是"没反应" |
 
-**6. "什么都对了，就是应用不会自动回来"** ← 真正的元凶
-
-Harness 的宿主进程是**以 Node 模式运行的 Electron**（`ELECTRON_RUN_AS_NODE=1` —— 这正是它让 Electron 当 Node 跑的方式），helper 继承了这个环境变量。于是 helper 再启动 `DeepSeek Harness.exe` 时，Electron **又变成无窗口的 Node 进程**：进程确实起来了、几秒后自己退出，界面永远不出现。而你手动双击图标时资源管理器给的是干净环境，所以一切正常 —— 现象看起来就像"只有插件不会重开"。
-
-修复（v0.1.4）：重启应用前先清掉 `ELECTRON_RUN_AS_NODE`、`ELECTRON_NO_ATTACH_CONSOLE`、`ELECTRON_FORCE_IS_PACKAGED`、`NODE_OPTIONS`、`DSH_DESKTOP_NODE_EXECUTABLE`，再用 **`Start-Process -UseNewEnvironment`**（全新环境，等价于从开始菜单打开）启动；macOS/Linux 脚本同样 `unset` 这些变量。
-
-**7. "切换后应用起不来：The application could not start or stopped unexpectedly"**
-
-崩溃日志里是决定性的一行：
-
-```
-webserver (required)
-  Error: listen UNKNOWN: unknown error 127.0.0.1:19387
-```
-
-**上一个宿主的端口还没释放**，新宿主绑定失败 → 启动审计判定必需插件未激活 → 应用弹"不可用"对话框。更糟的是重试会撞上自己上一次的崩溃实例，于是连续崩溃。
-
-修复（v0.1.5）：
-
-| 措施 | 说明 |
-|---|---|
-| 记录端口 | 停止应用**前**从它的进程里读出正在监听的端口（`Get-NetTCPConnection`，无此模块时退回 `netstat -ano`），不硬编码端口号 |
-| 等端口释放 | 杀掉进程后轮询到端口真正空闲（最长 30 秒）；若仍被占用，日志写明占用者并清掉那个残留进程 |
-| 健康检查 | 重启成功的判定 = **窗口存在 且 Host 正在该端口服务**（只看窗口会把"不可用"对话框误判为成功） |
-| 失败先清场 | 某次尝试没起来就先杀掉那个（半死的）实例，再重试，最多 3 次 |
-| 脚本自测 | `PROFILE_BRIDGE_SELFTEST=1` 让生成的脚本对自己的端口工具做一次真实验证（自检套件会跑它） |
+这些都能绕过（清环境变量 + 用新环境启动 + 等端口释放 + 健康检查 + 失败清场重试），但组合起来在别人机器上仍不够可靠，而**切换本身**根本不需要重启应用。所以现在：脚本只负责关闭应用并完成切换，日志最后一行明确写 `the app stays closed on purpose - open it yourself`。
 
 ## 手动回滚（不依赖本插件）
 
@@ -219,7 +193,7 @@ mv ~/.dsh/profiles/desktop.fresh-<时间戳> ~/.dsh/profiles/desktop
 node verify/precheck.mjs
 ```
 
-这个脚本会在系统临时目录里造一棵假的 `profiles` 树，然后**真的执行一次 helper**：改名备份、建 junction、合并 patch、重指向、还原，并断言每一步的结果。运行时使用 `skipAppStop` + `noRelaunch`，**不会碰你正在运行的应用**。
+这个脚本会在系统临时目录里造一棵假的 `profiles` 树，然后**真的执行一次 helper**：改名备份、建 junction、合并 patch、重指向、还原，并断言每一步的结果。运行时使用 `skipAppStop`，**不会碰你正在运行的应用**。
 
 仓库结构：
 
@@ -231,7 +205,8 @@ node verify/precheck.mjs
 | `lib/switch.windows.ps1.txt` | Windows 脚本模板（junction） |
 | `lib/switch.posix.sh.txt` | macOS/Linux 脚本模板（symlink） |
 | `client.js` | 浏览器半边：`settings.section` 设置页 |
-| `verify/precheck.mjs` | 沙盒端到端自检 |
+| `verify/precheck.mjs` | 沙盒自检（渲染 + 真实执行脚本 + 三条 RPC 通道） |
+| `verify/e2e.mjs` | 可选的真实端到端切换（会真的关闭应用，需 `--yes`） |
 
 ## License
 
@@ -260,7 +235,7 @@ dsh plugin --profile desktop add /absolute/path/to/dsh-profile-bridge
 # the npm line works once the package is published (not published yet)
 ```
 
-Open **Settings → Profiles**, pick the profile you want, press **Use this one**. The app closes itself, the switch happens, and it reopens with your plugins. **Revert to a standalone profile** undoes it.
+Open **Settings → Profiles**, pick the profile you want, press **Use this one**. The app closes itself, the switch happens, and **you open the app again** — it will be on your plugin profile. **Revert to a standalone profile** undoes it.
 
 > Use the `dsh plugin` CLI (or any tool whose pnpm major matches the profile's
 > `node_modules`). The Desktop app's own plugin manager uses its bundle pnpm (v11
@@ -269,41 +244,38 @@ Open **Settings → Profiles**, pick the profile you want, press **Use this one*
 
 ## How it works
 
-The switch must happen while the app is closed (it holds its own profile directory, and this plugin runs inside that process), so the Host half renders a small platform script, launches it detached, and returns immediately. The script waits for the app to exit, renames the old directory to `desktop.fresh-<stamp>`, creates a junction (Windows) or symlink (macOS/Linux), merges the Desktop UI/onboarding rows into the target profile's `cordis.patch.yml`, and relaunches the app. Failures roll back. Nothing is ever deleted recursively — the link is the only thing removed, everything else is renamed. Logs land in `<DSH_HOME>/profile-bridge/last-run.log` and are shown in the page.
+The switch must happen while the app is closed (it holds its own profile directory, and this plugin runs inside that process), so the Host half renders a small platform script, launches it detached, and returns immediately. The script waits for the app to exit, renames the old directory to `desktop.fresh-<stamp>`, creates a junction (Windows) or symlink (macOS/Linux), merges the Desktop UI/onboarding rows into the target profile's `cordis.patch.yml`, and stops there — **it does not restart the app**. Failures roll back. Nothing is ever deleted recursively — the link is the only thing removed, everything else is renamed. Logs land in `<DSH_HOME>/profile-bridge/last-run.log` and are shown in the page.
 
 ## Limits
 
-- The switch closes the app by design; the helper does it for you.
+- The switch closes the app by design; **you reopen it yourself** (see "why there is no automatic relaunch" in the Chinese section — the short version: a relaunch has to fight the Node-mode environment, a single-instance lock and the port the previous Host still holds, and none of that is needed to switch).
 - Do not run the Desktop app and `dsh --profile <same profile>` at the same time.
 - macOS/Linux use the symlink path; the same logic, but **not verified on real hardware** yet.
 - The plugin lives in a profile, so install it in both profiles if you want the page after switching.
 - **Windows launch detail (measured):** `spawn('powershell.exe', …, { detached: true })` creates a process that never runs, so the helper is started as a detached `cmd.exe` running `run.cmd`, which invokes PowerShell with its output redirected to `last-run.log.out`. When the panel shows no log, that transcript is where the reason is.
 - **The helper must not inherit the profile directory as its working directory.** The Desktop app starts its Host with `cwd` set to the profile directory, and a process whose working directory *is* a directory blocks renaming it — the helper would lock its own target and fail with "still locked" even after the app is gone. The launcher sets `cwd` to the plugin state directory, `run.cmd` starts with `cd /d "%~dp0"`, and the script leaves for `$env:TEMP`; the regression test runs the real wrapper from inside the profile directory.
-- **Relaunch robustness:** Electron's single-instance lock can still be held while the old instance exits, so the helper waits for it, remembers the executable path taken from the running app, retries the launch up to three times while waiting for a real window, and brings that window to the front.
-- **A relaunch needs a clean environment.** The Host runs the Electron binary in Node mode (`ELECTRON_RUN_AS_NODE=1`), and a helper that inherits that variable starts a window-less Node process instead of the app: the process appears, quits, and the app never comes back — while starting it by hand from Explorer works. The helper clears those variables and starts the app with `Start-Process -UseNewEnvironment`.
-- **The app port must be free before the next Host starts.** The Host binds a local port (19387 here); a Host that cannot bind it dies during the startup audit and the app shows "The application could not start or stopped unexpectedly". The helper reads the ports from the running app before stopping it, waits for them to be released, clears a leftover holder, and only counts a relaunch as successful when the window is up **and** the port is served again.
 
 ## Verify
 
-**沙盒自检（不碰你的应用）：**
+**Sandbox suite (nothing of yours is touched):**
 
 ```bash
 node verify/precheck.mjs
 ```
 
-它建一棵临时的 profiles 树，在里面真的做一次切换、改指向、还原（禁用"停应用/重启应用"，所以你机器上的东西一点都不会被动），并且会：渲染并**执行**生成的脚本、用真实包装脚本**从一个敌意工作目录**（profile 目录本身）里跑一遍、让生成的脚本跑**它自己的端口自测**（`PROFILE_BRIDGE_SELFTEST=1`）、解析 POSIX 模板的 shell 语法，以及验证宿主 RPC 的三条通道。
+It builds a throwaway profiles tree, really performs a switch, a re-point and a revert in it (with the app-stop disabled), renders and **executes** the generated script, runs the real wrapper from a deliberately hostile working directory (the profile directory itself), parses the POSIX template with a real shell when one is available, and checks all three host RPC transports.
 
-**真实端到端（会真的关闭并重启桌面版）：**
+**Real end-to-end (this really closes your app):**
 
 ```bash
-# 只打印计划，不动应用
+# json plan only
 node verify/e2e.mjs unlink
 node verify/e2e.mjs link web
-# 真的执行（应用会关闭、切换、再自动回来）
+# really do it: the app closes, the switch happens, start the app yourself afterwards
 node verify/e2e.mjs unlink --yes
 node verify/e2e.mjs link web --yes
 ```
 
-走的完全是插件的生产路径（渲染 → 写盘 → 分离式启动），所以它能验证沙盒测不出来的东西：分离启动、工作目录、Node 模式环境变量、端口释放、窗口与 Host 是否真的起来。**唯一带有破坏性的测试**，需要 `--yes` 才执行。
+走的完全是插件的生产路径（渲染 → 写盘 → 分离式启动），所以它能验证沙盒测不出来的东西：分离启动、工作目录、应用是否真的被关闭、链接是否真的生效。**唯一带有破坏性的测试**，需要 `--yes` 才执行；它不会替你打开应用 —— 那本来也该由你来做。
 
 MIT licensed.

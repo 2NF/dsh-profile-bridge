@@ -1,9 +1,10 @@
 #!/bin/sh
 # dsh-profile-bridge — generated helper (macOS / Linux).
 #
-# Runs OUTSIDE the Harness process, because the app holds its profile directory
-# while it runs: it waits for the app to exit, then points <profiles>/<active>
-# at the profile you chose, and optionally relaunches the app.
+# Runs OUTSIDE the Harness process, because the app holds its profile directory while
+# it runs: it stops the app, points <profiles>/<active> at the profile you chose, and
+# then leaves it to you to open the app again. It deliberately does NOT restart the
+# app (see the README: "why there is no automatic relaunch").
 #
 # Every value below is written by the plugin; do not edit by hand.
 
@@ -14,12 +15,10 @@ PROFILES='__PROFILES__'
 LIVE='__LIVE__'
 TARGET='__TARGET__'
 ACTIVE='__ACTIVENAME__'
-APPEXE='__APPEXE__'
 APPNAME='__APPNAME__'
 LOG='__LOG__'
 STAMP='__STAMP__'
 SKIP_APP_STOP=__SKIPAPPSTOP__
-NO_RELAUNCH=__NORELAUNCH__
 GRACE_SECONDS=__GRACE__
 
 log() {
@@ -85,37 +84,6 @@ PATCH
   log "merged desktop UI settings into $patch"
 }
 
-relaunch_app() {
-  if [ "$NO_RELAUNCH" = "true" ]; then log 'relaunch skipped by request'; return 0; fi
-  if [ -z "$APPEXE" ] || [ ! -e "$APPEXE" ]; then
-    log 'no app executable known; please start the app manually'
-    return 0
-  fi
-  # The Harness Host runs as the Electron binary in Node mode (ELECTRON_RUN_AS_NODE=1)
-  # and this helper inherited that environment; starting the app with it set launches a
-  # window-less Node process instead of the app. Drop the Node-mode overrides first
-  # (`open -a` is unaffected either way, a bare binary is not).
-  unset ELECTRON_RUN_AS_NODE ELECTRON_NO_ATTACH_CONSOLE NODE_OPTIONS DSH_DESKTOP_NODE_EXECUTABLE 2>/dev/null || true
-  attempt=1
-  while [ "$attempt" -le 3 ]; do
-    case "$APPEXE" in
-      *.app) open -a "$APPEXE" >/dev/null 2>&1 || log "attempt $attempt: failed to open $APPEXE" ;;
-      *) nohup "$APPEXE" >/dev/null 2>&1 & ;;
-    esac
-    log "relaunch attempt $attempt: started $APPEXE"
-    # `open -a` also activates the window; a bare binary just needs to stay alive.
-    i=0
-    while [ "$i" -lt 40 ]; do
-      pgrep -f "$APPNAME" >/dev/null 2>&1 && { log 'the app is running again'; return 0; }
-      sleep 0.5 2>/dev/null || sleep 1
-      i=$((i + 1))
-    done
-    log 'the app did not come back; retrying'
-    attempt=$((attempt + 1))
-  done
-  log 'the app did not come back on its own; please start it manually'
-}
-
 LIVE_IS_LINK=false
 [ -L "$LIVE" ] && LIVE_IS_LINK=true
 
@@ -171,5 +139,5 @@ case "$MODE" in
     ;;
 esac
 
-relaunch_app
 log 'done'
+log 'the app stays closed on purpose - open it yourself to use the new profile'

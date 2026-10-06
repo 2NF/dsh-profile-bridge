@@ -1,6 +1,6 @@
 {
   "name": "dsh-profile-bridge",
-  "version": "0.1.5",
+  "version": "0.2.0",
   "description": "涓€閿 DeepSeek Harness 妗岄潰鐗堢敤涓婁綘宸茶濂芥彃浠剁殑 profile锛堢洰褰曢摼鎺ワ紝鑷姩澶囦唤銆侀殢鏃惰繕鍘燂級锝淢ake the DeepSeek Harness Desktop app use an existing plugin profile 鈥?one-click switch, fully reversible.",
   "license": "MIT",
   "author": "2NF",

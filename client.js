@@ -34,7 +34,7 @@ window.__ModuleLoader__.load({
       use: '使用它',
       revert: '还原为独立 profile',
       working: '执行中…',
-      closing: '桌面版即将自动关闭，几秒后会用所选 profile 重新打开。',
+      closing: '切换已开始：桌面版会关闭，完成后**不会自动打开**——请自己双击打开它，那时就是所选 profile 了。',
       cliHint: '当前 Harness 不是桌面版（probe 到的是普通 profile）。命令行用户直接用 dsh --profile <名称> 即可，不需要本页的链接。',
       noTargets: '没有别的 profile 可切换。',
       warnings: '提示',
@@ -42,7 +42,7 @@ window.__ModuleLoader__.load({
       log: '上次操作日志',
       logEmpty: '（还没有日志）',
       why: '桌面版把 profile 目录写死为 <DSH_HOME>/profiles/desktop，所以它看不到你其他 profile 里的插件。本页通过目录链接（Windows 用 junction，macOS/Linux 用符号链接）把两者接起来，原目录会先备份，随时可还原。',
-      mustClose: '注意：切换需要关闭应用才能改目录，脚本会自动完成关闭与重启。',
+      mustClose: '注意：切换必须先关闭桌面版才能改目录。脚本会替你关闭它，但**不会自动重启**（自动重启在不同机器上不够可靠），完成后请自己打开桌面版。',
       how: '工作原理',
     }
     const en = {
@@ -63,7 +63,7 @@ window.__ModuleLoader__.load({
       use: 'Use this one',
       revert: 'Revert to a standalone profile',
       working: 'Working…',
-      closing: 'The app will close by itself in a moment and reopen with the chosen profile.',
+      closing: 'The switch has started: the app closes now and does NOT reopen by itself — open it yourself and it will be on the profile you picked.',
       cliHint: 'This Harness is not the Desktop app, so it already runs the profile you asked for. Command-line users can just pass dsh --profile <name>; the link below is unnecessary.',
       noTargets: 'There is no other profile to switch to.',
       warnings: 'Warnings',
@@ -71,7 +71,7 @@ window.__ModuleLoader__.load({
       log: 'Last operation log',
       logEmpty: '(no log yet)',
       why: 'The Desktop app hardcodes its profile directory to <DSH_HOME>/profiles/desktop, so plugins installed in your other profiles are invisible to it. This page links the two (a junction on Windows, a symlink elsewhere); the previous directory is backed up first and can be restored at any time.',
-      mustClose: 'Note: the switch needs the app closed to move the directory, so the helper closes and restarts it for you.',
+      mustClose: 'Note: the app has to be closed to move its profile directory. The helper closes it for you but does NOT restart it (an automatic relaunch proved unreliable across machines), so open the app yourself when the switch is done.',
       how: 'How it works',
     }
 
@@ -226,11 +226,8 @@ window.__ModuleLoader__.load({
             )
           : null,
 
-        receipt?.endpoint === 'link'
-          ? h('p', { style: { margin: 0, opacity: 0.85 } }, `${t('closing')} (${receipt.value?.note ?? ''})`)
-          : null,
-        receipt?.endpoint === 'unlink'
-          ? h('p', { style: { margin: 0, opacity: 0.85 } }, receipt.value?.note ?? '')
+        receipt !== null
+          ? h('p', { style: { margin: 0, opacity: 0.85 } }, t('closing'))
           : null,
 
         failure !== null ? h('p', { style: { ...styles.error, margin: 0 } }, `${t('failure')}: ${failure}`) : null,
