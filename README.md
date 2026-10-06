@@ -160,6 +160,18 @@ pnpm now wants to use the store at "...\pnpm\store\v11" ...
 
 失败时脚本还会列出**仍提到该路径的进程**（`rename blocked by: …`），并且无论成功失败都会把应用重新拉起来。自检里加了回归用例：**故意把工作目录设为 profile 目录**，再执行真实包装脚本，必须仍然切换成功。
 
+**5. "切换成功，但应用没有自动回来"**
+
+helper 本来就会重启应用，但 **Electron 的单实例锁**在退出瞬间仍可能被旧实例持有：新实例会把启动请求转交给那个正在退出的进程，然后自己退出 —— 表现出来就是"应用没回来"。现在：
+
+| 措施 | 说明 |
+|---|---|
+| 退出后等待 | `Stop-App` 杀完进程后**再等 2 秒**，给单实例锁释放留时间 |
+| 记录真实路径 | 从**正在运行的应用进程**里取可执行文件路径（不再依赖事先猜测的路径） |
+| 多次重试 | `Relaunch-App` 最多启动 3 次，每次**等待窗口真正出现**（最长 20 秒） |
+| 带到前台 | 窗口出现后用 `ShowWindow` + `SetForegroundWindow` 把它**提到最前** |
+| 明确失败 | 三次都没起来就写"请手动启动应用"，不静默失败 |
+
 ## 手动回滚（不依赖本插件）
 
 ```powershell
@@ -240,6 +252,7 @@ The switch must happen while the app is closed (it holds its own profile directo
 - The plugin lives in a profile, so install it in both profiles if you want the page after switching.
 - **Windows launch detail (measured):** `spawn('powershell.exe', …, { detached: true })` creates a process that never runs, so the helper is started as a detached `cmd.exe` running `run.cmd`, which invokes PowerShell with its output redirected to `last-run.log.out`. When the panel shows no log, that transcript is where the reason is.
 - **The helper must not inherit the profile directory as its working directory.** The Desktop app starts its Host with `cwd` set to the profile directory, and a process whose working directory *is* a directory blocks renaming it — the helper would lock its own target and fail with "still locked" even after the app is gone. The launcher sets `cwd` to the plugin state directory, `run.cmd` starts with `cd /d "%~dp0"`, and the script leaves for `$env:TEMP`; the regression test runs the real wrapper from inside the profile directory.
+- **Relaunch robustness:** Electron's single-instance lock can still be held while the old instance exits, so the helper waits for it, remembers the executable path taken from the running app, retries the launch up to three times while waiting for a real window, and brings that window to the front.
 
 ## Verify
 

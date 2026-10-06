@@ -1,6 +1,6 @@
 {
   "name": "dsh-profile-bridge",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "一键让 DeepSeek Harness 桌面版用上你已装好插件的 profile（目录链接，自动备份、随时还原）｜Make the DeepSeek Harness Desktop app use an existing plugin profile — one-click switch, fully reversible.",
   "license": "MIT",
   "author": "2NF",

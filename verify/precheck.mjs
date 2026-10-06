@@ -143,6 +143,24 @@ assert.equal(renderHelper({
 }).command, '/bin/sh', 'POSIX keeps the /bin/sh launcher')
 console.log('launcher shape: ok')
 
+// The POSIX template is never executed on Windows, so at least parse it with a real
+// shell whenever one is available.
+try {
+  const posix = renderHelper({
+    profilesRoot: '/tmp/p/profiles', liveDir: '/tmp/p/profiles/desktop', activeName: 'desktop',
+    targetDir: '/tmp/p/profiles/web', appExe: '/Applications/DeepSeek Harness.app',
+    logPath: '/tmp/p/profile-bridge/last-run.log', stamp: 'syntax', stateDir: '/tmp/p/profile-bridge',
+    platform: 'linux',
+  })
+  const posixPath = join(sandbox, 'posix-syntax-check.sh')
+  writeFileSync(posixPath, posix.text, 'utf8')
+  execFileSync('bash', ['-n', posixPath], { stdio: 'inherit' })
+  console.log('posix syntax: ok')
+} catch (error) {
+  if (error?.code === 'ENOENT') console.log('posix syntax: skipped (no bash on PATH)')
+  else throw error
+}
+
 if (process.platform === 'win32') {
   // link, launched by the real wrapper from inside the profile directory — the
   // hostile working directory that used to make this fail with "still locked".

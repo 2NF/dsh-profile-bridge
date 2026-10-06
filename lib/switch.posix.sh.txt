@@ -46,6 +46,9 @@ stop_app() {
     i=$((i + 1))
   done
   if pgrep -f "$APPNAME" >/dev/null 2>&1; then log 'warning: the app is still running'; fi
+  # The app releases its single-instance lock while exiting; starting the next
+  # instance too early can make it hand over to the dying one and quit.
+  sleep 2
 }
 
 merge_patch() {
@@ -88,11 +91,24 @@ relaunch_app() {
     log 'no app executable known; please start the app manually'
     return 0
   fi
-  case "$APPEXE" in
-    *.app) open -a "$APPEXE" >/dev/null 2>&1 || log "failed to open $APPEXE" ;;
-    *) nohup "$APPEXE" >/dev/null 2>&1 & ;;
-  esac
-  log "relaunched $APPEXE"
+  attempt=1
+  while [ "$attempt" -le 3 ]; do
+    case "$APPEXE" in
+      *.app) open -a "$APPEXE" >/dev/null 2>&1 || log "attempt $attempt: failed to open $APPEXE" ;;
+      *) nohup "$APPEXE" >/dev/null 2>&1 & ;;
+    esac
+    log "relaunch attempt $attempt: started $APPEXE"
+    # `open -a` also activates the window; a bare binary just needs to stay alive.
+    i=0
+    while [ "$i" -lt 40 ]; do
+      pgrep -f "$APPNAME" >/dev/null 2>&1 && { log 'the app is running again'; return 0; }
+      sleep 0.5 2>/dev/null || sleep 1
+      i=$((i + 1))
+    done
+    log 'the app did not come back; retrying'
+    attempt=$((attempt + 1))
+  done
+  log 'the app did not come back on its own; please start it manually'
 }
 
 LIVE_IS_LINK=false

@@ -21,6 +21,9 @@ $skipAppStop  = __SKIPAPPSTOP__
 $noRelaunch   = __NORELAUNCH__
 $graceMs      = __GRACE__
 
+# Filled in from the running app before it is stopped; preferred for the relaunch.
+$script:resolvedAppExe = ''
+
 function Write-Log([string] $message) {
   $line = '{0} {1}' -f (Get-Date).ToString('yyyy-MM-ddTHH:mm:ss'), $message
   try {
@@ -40,6 +43,13 @@ function Stop-App {
   Start-Sleep -Milliseconds $graceMs
   $processes = Get-AppProcesses
   if ($processes.Count -eq 0) { Write-Log 'app not running'; return }
+  # Remember where the app really lives: relaunching must not depend on a guess
+  # made before the app was stopped.
+  $captured = $processes | Where-Object { $_.Path } | Select-Object -First 1 -ExpandProperty Path
+  if (-not [string]::IsNullOrWhiteSpace($captured)) {
+    $script:resolvedAppExe = $captured
+    Write-Log "app executable: $captured"
+  }
   Write-Log ('stopping {0} app process(es)' -f $processes.Count)
   $processes | Stop-Process -Force -ErrorAction SilentlyContinue
   for ($i = 0; $i -lt 40; $i++) {
@@ -48,6 +58,9 @@ function Stop-App {
   }
   $left = (Get-AppProcesses).Count
   if ($left -gt 0) { Write-Log ('warning: {0} app process(es) still running' -f $left) }
+  # Electron releases its single-instance lock as it exits; starting the next
+  # instance too early makes it hand over to the dying one and exit silently.
+  Start-Sleep -Seconds 2
 }
 
 function Remove-Link([string] $path) {
@@ -70,14 +83,58 @@ function Merge-Patch([string] $target) {
   Write-Log "merged desktop UI settings into $patch"
 }
 
+# Wait for the relaunched app to own a real window (a process without one is not a
+# visible app to the user).
+function Wait-AppWindow([int] $timeoutSeconds) {
+  $deadline = (Get-Date).AddSeconds($timeoutSeconds)
+  while ((Get-Date) -lt $deadline) {
+    $candidate = Get-AppProcesses | Where-Object { $_.MainWindowHandle -ne 0 } | Select-Object -First 1
+    if ($null -ne $candidate) { return $candidate }
+    Start-Sleep -Milliseconds 500
+  }
+  return $null
+}
+
+# Bring that window to the foreground so the switch visibly ends with the app back
+# on screen instead of hidden behind other windows.
+function Bring-AppToFront($process) {
+  if ($null -eq $process) { return }
+  try {
+    Add-Type -ErrorAction Stop -Namespace ProfileBridge -Name User32 -MemberDefinition @'
+[System.Runtime.InteropServices.DllImport("user32.dll")] public static extern bool ShowWindow(System.IntPtr hWnd, int nCmdShow);
+[System.Runtime.InteropServices.DllImport("user32.dll")] public static extern bool SetForegroundWindow(System.IntPtr hWnd);
+'@
+    [void][ProfileBridge.User32]::ShowWindow($process.MainWindowHandle, 9)
+    [void][ProfileBridge.User32]::SetForegroundWindow($process.MainWindowHandle)
+    Write-Log 'brought the app window to the front'
+  } catch {
+    Write-Log ('could not focus the app window: ' + $_.Exception.Message)
+  }
+}
+
 function Relaunch-App {
   if ($noRelaunch) { Write-Log 'relaunch skipped by request'; return }
-  if ([string]::IsNullOrWhiteSpace($appExe) -or -not (Test-Path $appExe)) {
+  # Prefer the executable captured from the running app; fall back to the path the
+  # plugin resolved before the switch.
+  $exe = $appExe
+  if (-not [string]::IsNullOrWhiteSpace($script:resolvedAppExe)) { $exe = $script:resolvedAppExe }
+  if ([string]::IsNullOrWhiteSpace($exe) -or -not (Test-Path $exe)) {
     Write-Log 'no app executable known; please start the app manually'
     return
   }
-  Start-Process -FilePath $appExe | Out-Null
-  Write-Log "relaunched $appExe"
+  for ($attempt = 1; $attempt -le 3; $attempt++) {
+    Start-Process -FilePath $exe | Out-Null
+    Write-Log ('relaunch attempt {0}: started {1}' -f $attempt, $exe)
+    $window = Wait-AppWindow 20
+    if ($null -ne $window) {
+      Write-Log ('app window is up (pid {0})' -f $window.Id)
+      Bring-AppToFront $window
+      return
+    }
+    Write-Log 'no app window appeared; retrying'
+    Start-Sleep -Seconds 2
+  }
+  Write-Log 'the app did not come back on its own; please start it manually'
 }
 
 # The Harness Host runs with the profile directory as its working directory, so a
