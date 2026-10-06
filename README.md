@@ -21,20 +21,24 @@ Harness 的插件是**按 profile 隔离**的。桌面版把 profile 目录硬�
 ## 安装
 
 ```sh
-# npm（推荐）
-dsh plugin --profile desktop add dsh-profile-bridge
+# 从 GitHub 安装（当前推荐，已实测可用）
+dsh plugin --profile desktop add github:2NF/dsh-profile-bridge
 
-# 或者从 GitHub
-dsh plugin --profile desktop add github:<你的账号>/dsh-profile-bridge
-
-# 或者本地目录
+# 或者本地目录（开发/离线）
 dsh plugin --profile desktop add /绝对路径/dsh-profile-bridge
+
+# npm 一行待发布后可用（本包尚未发布到 npm，现在执行会 404）
+# dsh plugin --profile desktop add dsh-profile-bridge
 ```
 
 装完刷新页面（或重启应用）：**设置 → 配置档案**。
 
+> ⚠️ **用哪个工具装**：请用命令行 `dsh plugin`（或与 profile 的 `node_modules` **同一 pnpm 大版本**的工具）。
+> 桌面版自带的插件管理器用的是它自己的 pnpm（本例 v11），如果 profile 是 pnpm v10 装的，会报
+> `ERR_PNPM_UNEXPECTED_STORE` 并拒绝安装 —— 详见下方「已知问题」。
+
 > 想让它在你切换之后仍然可用，就把本插件也装进你准备切换过去的那个 profile：
-> `dsh plugin --profile web add dsh-profile-bridge`
+> `dsh plugin --profile web add github:2NF/dsh-profile-bridge`
 
 ### 安装方式二：本地链接（不动 pnpm）
 
@@ -180,11 +184,19 @@ The Desktop app does not reset an existing profile — it only writes a default 
 ## Install
 
 ```sh
-dsh plugin --profile desktop add dsh-profile-bridge
-# or: dsh plugin --profile desktop add github:<you>/dsh-profile-bridge
+# from GitHub (recommended today; verified end to end)
+dsh plugin --profile desktop add github:2NF/dsh-profile-bridge
+# or a local checkout
+dsh plugin --profile desktop add /absolute/path/to/dsh-profile-bridge
+# the npm line works once the package is published (not published yet)
 ```
 
 Open **Settings → Profiles**, pick the profile you want, press **Use this one**. The app closes itself, the switch happens, and it reopens with your plugins. **Revert to a standalone profile** undoes it.
+
+> Use the `dsh plugin` CLI (or any tool whose pnpm major matches the profile's
+> `node_modules`). The Desktop app's own plugin manager uses its bundle pnpm (v11
+> here) and refuses to install into a v10-managed profile with
+> `ERR_PNPM_UNEXPECTED_STORE` — see Known issues below.
 
 ## How it works
 
