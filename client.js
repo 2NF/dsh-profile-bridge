@@ -174,7 +174,7 @@ window.__ModuleLoader__.load({
           h('div', { style: styles.muted },
             h('span', null, status?.activeDir ?? ''),
           ),
-          isDesktop ? null : h('p', { style: { ...styles.muted, margin: 0 } }, t('cliHint')),
+          isDesktop || status === null ? null : h('p', { style: { ...styles.muted, margin: 0 } }, t('cliHint')),
         ),
 
         h('div', { style: styles.card },

@@ -2,3 +2,5 @@ node_modules/
 *.log
 *.tgz
 .DS_Store
+# development captures written by verify/ scripts
+verify/*.png
